@@ -24,13 +24,22 @@ readonly class ServerConfig
      */
     public static function fromArray(string $key, array $config): self
     {
+        // Extract options, potentially merging top-level overrides
+        $optionsArr = $config['options'] ?? [];
+        if (isset($config['timeout'])) {
+            $optionsArr['connect_timeout'] = $config['timeout'];
+        }
+        if (isset($config['write_buffer_limit'])) {
+            $optionsArr['write_buffer_limit'] = $config['write_buffer_limit'];
+        }
+
         return new self(
             key: $key,
             host: $config['host'] ?? throw new \InvalidArgumentException("Missing host for server $key"),
             port: $config['port'] ?? 5038,
             username: $config['username'] ?? null,
             secret: $config['secret'] ?? null,
-            options: isset($config['options']) ? ClientOptions::fromArray($config['options']) : null
+            options: !empty($optionsArr) ? ClientOptions::fromArray($optionsArr) : null
         );
     }
 }

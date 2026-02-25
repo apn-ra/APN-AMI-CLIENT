@@ -198,4 +198,22 @@ class ParserTest extends TestCase
         $this->assertEquals('2', $var[1]);
         $this->assertEquals('3', $var[2]);
     }
+    public function test_it_handles_multi_line_follows_on_actionid_without_breaking_it(): void
+    {
+        $data = "Response: Follows\r\nActionID: 123\r\nOutput line 1\r\nOutput line 2\r\n\r\n";
+        $this->parser->push($data);
+        
+        $message = $this->parser->next();
+        
+        $this->assertInstanceOf(Response::class, $message);
+        $this->assertEquals('123', $message->getActionId());
+        
+        // Output should be present in some key, let's see what happened
+        $actionId = $message->getHeader('actionid');
+        $this->assertIsArray($actionId);
+        $this->assertCount(3, $actionId);
+        $this->assertEquals('123', $actionId[0]);
+        $this->assertEquals('Output line 1', $actionId[1]);
+        $this->assertEquals('Output line 2', $actionId[2]);
+    }
 }

@@ -44,4 +44,15 @@ return [
         'heartbeat_interval' => 15,
         'max_pending_actions' => 5000,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Laravel Event Bridging
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, all AMI events will be dispatched via Laravel's native
+    | event system. Disabled by default for performance in high-throughput.
+    |
+    */
+    'bridge_laravel_events' => env('AMI_BRIDGE_LARAVEL_EVENTS', false),
 ];

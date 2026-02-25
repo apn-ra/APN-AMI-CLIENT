@@ -6,6 +6,8 @@ namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
+
 /**
  * Base class for all outgoing AMI actions.
  */
@@ -13,10 +15,13 @@ abstract readonly class Action
 {
     /**
      * @param array<string, string|array<int, string>> $parameters Additional AMI headers.
+     * @param string|null $actionId Optional ActionID.
+     * @param CompletionStrategyInterface|null $strategy Optional completion strategy.
      */
     public function __construct(
         protected array $parameters = [],
         protected ?string $actionId = null,
+        protected ?CompletionStrategyInterface $strategy = null,
     ) {
     }
 
@@ -28,7 +33,10 @@ abstract readonly class Action
     /**
      * Get the completion strategy for this action.
      */
-    abstract public function getCompletionStrategy(): CompletionStrategyInterface;
+    public function getCompletionStrategy(): CompletionStrategyInterface
+    {
+        return $this->strategy ?? new SingleResponseStrategy();
+    }
 
     /**
      * Get the ActionID if set.

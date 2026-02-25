@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 
 /**
  * Represents an AMI Originate action.
@@ -27,7 +27,8 @@ final readonly class Originate extends Action
         ?string $channelId = null,
         ?string $otherChannelId = null,
         array $parameters = [],
-        ?string $actionId = null
+        ?string $actionId = null,
+        ?CompletionStrategyInterface $strategy = null,
     ) {
         $parameters['Channel'] = $channel;
         
@@ -71,7 +72,7 @@ final readonly class Originate extends Action
             $parameters['Variable'][] = "$key=$value";
         }
 
-        parent::__construct($parameters, $actionId);
+        parent::__construct($parameters, $actionId, $strategy);
     }
 
     public function getActionName(): string
@@ -79,17 +80,13 @@ final readonly class Originate extends Action
         return 'Originate';
     }
 
-    public function getCompletionStrategy(): CompletionStrategyInterface
-    {
-        return new SingleResponseStrategy();
-    }
-
     public function withActionId(string $actionId): static
     {
         return new self(
             channel: $this->parameters['Channel'],
             parameters: $this->parameters,
-            actionId: $actionId
+            actionId: $actionId,
+            strategy: $this->strategy
         );
     }
 }

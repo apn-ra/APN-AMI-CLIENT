@@ -17,9 +17,9 @@
 3.4 [x] Ensure runtime ownership is external (core provides the mechanism, environment provides the loop).
 
 ## 4. Construction & Lifecycle
-4.1 [ ] Implement `AmiClientManager` construction with `ServerRegistry`, `ClientOptions`, and `LoggerInterface`.
-4.2 [ ] Support Lazy-open connection strategy (connect only when first action is sent).
-4.3 [ ] Support Eager-open connection strategy (connect all configured servers via `connectAll()`).
+4.1 [x] Implement `AmiClientManager` construction with `ServerRegistry`, `ClientOptions`, and `LoggerInterface`.
+4.2 [x] Support Lazy-open connection strategy (connect only when first action is sent).
+4.3 [x] Support Eager-open connection strategy (connect all configured servers via `connectAll()`).
 
 ## 5. Core Architecture Overview
 5.1 [x] Implement Cluster Layer: Orchestrate multiple client instances.
@@ -40,7 +40,7 @@
 ## 7. Generic Action Framework
 7.1 [x] Implement immutable `GenericAction` DTO for arbitrary AMI actions.
 7.2 [x] Support `CompletionStrategyInterface` with `SingleResponseStrategy` as default.
-7.3 [ ] Support overriding strategies for multi-message or async event completion.
+7.3 [x] Support overriding strategies for multi-message or async event completion.
 
 ## 8. Command Action & Follows Parsing
 8.1 [x] Implement `Response: Follows` recognition logic in the parser.
@@ -73,14 +73,14 @@
 
 ## 13. Action Strategy Roadmap
 13.1 [x] v1 Core (Minimal): Implement Login, Logoff, Ping, GenericAction.
-13.2 [ ] v1.5 Common Dialer Extensions:
-    - [ ] Originate
-    - [ ] Hangup
-    - [ ] Redirect
-    - [ ] SetVar
-    - [ ] GetVar
-    - [ ] Command (Follows)
-13.3 [ ] v2 Extended Action Set (QueueStatus, PJSIPShowEndpoint, etc.)
+13.2 [x] v1.5 Common Dialer Extensions:
+    - [x] Originate
+    - [x] Hangup
+    - [x] Redirect
+    - [x] SetVar
+    - [x] GetVar
+    - [x] Command (Follows)
+13.3 [x] v2 Extended Action Set (QueueStatus, PJSIPShowEndpoint, etc.)
 
 ## 14. Protocol Parser & Safety
 14.1 [x] Implement framing detection using `\r\n\r\n` delimiter.
@@ -101,13 +101,13 @@
 16.3 [x] Implement deterministic tick loop (I/O, Parsing, Correlation Sweep, Health).
 
 ## 17. Laravel Integration Layer (Adapter)
-17.1 [ ] Map configuration arrays to `ServerConfig` and `ClientOptions` DTOs.
-17.2 [ ] Bind `AmiClientManager` as a singleton in the service container.
-17.3 [ ] Bind default `RoutingStrategyInterface` in the Service Provider.
-17.4 [ ] Inject the Laravel/PSR logger into the manager.
-17.5 [ ] Provide `Ami` facade for convenient application access.
-17.6 [ ] Provide `ami:listen` Artisan command for worker Profile B.
-17.7 [ ] (Optional) Implement bridging of AMI events to Laravel's native event system.
+17.1 [x] Map configuration arrays to `ServerConfig` and `ClientOptions` DTOs.
+17.2 [x] Bind `AmiClientManager` as a singleton in the service container.
+17.3 [x] Bind default `RoutingStrategyInterface` in the Service Provider.
+17.4 [x] Inject the Laravel/PSR logger into the manager.
+17.5 [x] Provide `Ami` facade for convenient application access.
+17.6 [x] Provide `ami:listen` Artisan command for worker Profile B.
+17.7 [x] (Optional) Implement bridging of AMI events to Laravel's native event system.
 
 ## 18. Testing Strategy
 18.1 [x] Achieve 100% unit coverage for Parser, Correlation, and Routing logic.

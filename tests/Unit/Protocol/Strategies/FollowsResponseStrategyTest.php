@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Tests\Unit\Correlation\Strategies;
+namespace Tests\Unit\Protocol\Strategies;
 
-use Apn\AmiClient\Correlation\Strategies\FollowsResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\FollowsResponseStrategy;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Exceptions\ProtocolException;
 use PHPUnit\Framework\TestCase;

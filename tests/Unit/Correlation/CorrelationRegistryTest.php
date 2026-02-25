@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace tests\Unit\Correlation;
 
 use Apn\AmiClient\Correlation\CorrelationRegistry;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
-use Apn\AmiClient\Correlation\Strategies\MultiResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\MultiResponseStrategy;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
@@ -130,7 +130,7 @@ class CorrelationRegistryTest extends TestCase
     public function test_it_handles_follows_response_actions(): void
     {
         $registry = new CorrelationRegistry();
-        $strategy = new \Apn\AmiClient\Correlation\Strategies\FollowsResponseStrategy();
+        $strategy = new \Apn\AmiClient\Protocol\Strategies\FollowsResponseStrategy();
         $action = $this->createMockAction('server:1:1', $strategy);
         
         $pending = $registry->register($action);
@@ -248,9 +248,9 @@ readonly class MockAction extends Action
 {
     public function __construct(
         ?string $actionId,
-        private CompletionStrategyInterface $strategy
+        CompletionStrategyInterface $strategy
     ) {
-        parent::__construct([], $actionId);
+        parent::__construct([], $actionId, $strategy);
     }
 
     public function getActionName(): string

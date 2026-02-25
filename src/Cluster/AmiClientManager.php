@@ -238,8 +238,28 @@ class AmiClientManager
     public function health(): array
     {
         $health = [];
+
+        // 1. All servers from registry
+        foreach ($this->registry->all() as $key => $config) {
+            if (isset($this->clients[$key])) {
+                $health[$key] = $this->clients[$key]->health();
+            } else {
+                $health[$key] = [
+                    'server_key' => $key,
+                    'status' => 'disconnected',
+                    'connected' => false,
+                    'memory_usage_bytes' => 0,
+                    'pending_actions' => 0,
+                    'dropped_events' => 0,
+                ];
+            }
+        }
+
+        // 2. Manually added clients not in registry
         foreach ($this->clients as $key => $client) {
-            $health[$key] = $client->health();
+            if (!isset($health[$key])) {
+                $health[$key] = $client->health();
+            }
         }
 
         return $health;

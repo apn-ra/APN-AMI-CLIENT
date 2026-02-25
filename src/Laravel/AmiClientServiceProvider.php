@@ -6,8 +6,12 @@ namespace Apn\AmiClient\Laravel;
 
 use Apn\AmiClient\Cluster\AmiClientManager;
 use Apn\AmiClient\Cluster\ConfigLoader;
+use Apn\AmiClient\Cluster\Contracts\RoutingStrategyInterface;
+use Apn\AmiClient\Cluster\Routing\RoundRobinRoutingStrategy;
 use Apn\AmiClient\Laravel\Commands\ListenCommand;
+use Apn\AmiClient\Laravel\Events\AmiEventReceived;
 use Illuminate\Support\ServiceProvider;
+use Psr\Log\LoggerInterface;
 
 class AmiClientServiceProvider extends ServiceProvider
 {
@@ -18,8 +22,19 @@ class AmiClientServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__ . '/../../config/ami-client.php', 'ami-client');
 
+        $this->app->bind(RoutingStrategyInterface::class, RoundRobinRoutingStrategy::class);
+
         $this->app->singleton(AmiClientManager::class, function ($app) {
-            return ConfigLoader::load($app['config']['ami-client']);
+            $manager = ConfigLoader::load(
+                $app['config']['ami-client'],
+                $app->make(LoggerInterface::class)
+            );
+
+            if ($app->bound(RoutingStrategyInterface::class)) {
+                $manager->routing($app->make(RoutingStrategyInterface::class));
+            }
+
+            return $manager;
         });
 
         $this->app->alias(AmiClientManager::class, 'ami');
@@ -38,6 +53,12 @@ class AmiClientServiceProvider extends ServiceProvider
             $this->commands([
                 ListenCommand::class,
             ]);
+        }
+
+        if ($this->app['config']['ami-client.bridge_laravel_events'] ?? false) {
+            $this->app->make(AmiClientManager::class)->onAnyEvent(function ($event) {
+                AmiEventReceived::dispatch($event);
+            });
         }
     }
 }

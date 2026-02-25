@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 
 /**
  * AMI Ping action.
@@ -17,13 +17,8 @@ readonly class Ping extends Action
         return 'Ping';
     }
 
-    public function getCompletionStrategy(): CompletionStrategyInterface
-    {
-        return new SingleResponseStrategy();
-    }
-
     public function withActionId(string $actionId): static
     {
-        return new self($this->parameters, $actionId);
+        return new self($this->parameters, $actionId, $this->strategy);
     }
 }

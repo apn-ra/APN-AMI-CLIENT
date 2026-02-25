@@ -11,6 +11,8 @@ readonly class ClientOptions
 {
     public function __construct(
         public int $connectTimeout = 10,
+        public int $readTimeout = 30,
+        public int $heartbeatInterval = 15,
         public int $writeBufferLimit = 5242880, // 5MB
         public int $maxPendingActions = 5000,
         public int $eventQueueCapacity = 10000,
@@ -29,6 +31,8 @@ readonly class ClientOptions
     {
         return new self(
             connectTimeout: $options['connect_timeout'] ?? 10,
+            readTimeout: $options['read_timeout'] ?? 30,
+            heartbeatInterval: $options['heartbeat_interval'] ?? 15,
             writeBufferLimit: $options['write_buffer_limit'] ?? 5242880,
             maxPendingActions: $options['max_pending_actions'] ?? 5000,
             eventQueueCapacity: $options['event_queue_capacity'] ?? 10000,

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 
 /**
  * AMI Login action.
@@ -16,22 +16,18 @@ readonly class Login extends Action
         string $username,
         #[\SensitiveParameter] string $secret,
         array $parameters = [],
-        ?string $actionId = null
+        ?string $actionId = null,
+        ?CompletionStrategyInterface $strategy = null,
     ) {
         $parameters['Username'] = $username;
         $parameters['Secret'] = $secret;
         
-        parent::__construct($parameters, $actionId);
+        parent::__construct($parameters, $actionId, $strategy);
     }
 
     public function getActionName(): string
     {
         return 'Login';
-    }
-
-    public function getCompletionStrategy(): CompletionStrategyInterface
-    {
-        return new SingleResponseStrategy();
     }
 
     public function withActionId(string $actionId): static
@@ -42,7 +38,8 @@ readonly class Login extends Action
             $this->parameters['Username'],
             $this->parameters['Secret'],
             $this->parameters,
-            $actionId
+            $actionId,
+            $this->strategy
         );
     }
 }

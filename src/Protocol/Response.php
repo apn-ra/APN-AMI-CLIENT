@@ -24,6 +24,9 @@ readonly class Response extends Message
     public function getActionId(): ?string
     {
         $id = $this->getHeader('ActionID');
+        if (is_array($id)) {
+            return (string)($id[0] ?? null);
+        }
         return is_string($id) ? $id : null;
     }
 

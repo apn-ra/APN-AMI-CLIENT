@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Apn\AmiClient\Correlation\Strategies;
+namespace Apn\AmiClient\Protocol\Strategies;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 use Apn\AmiClient\Protocol\Response;

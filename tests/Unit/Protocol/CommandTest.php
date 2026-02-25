@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace tests\Unit\Protocol;
 
 use Apn\AmiClient\Protocol\Command;
-use Apn\AmiClient\Correlation\Strategies\FollowsResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\FollowsResponseStrategy;
 use PHPUnit\Framework\TestCase;
 
 class CommandTest extends TestCase

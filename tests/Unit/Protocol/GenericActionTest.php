@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace tests\Unit\Protocol;
 
 use Apn\AmiClient\Protocol\GenericAction;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 use PHPUnit\Framework\TestCase;
 

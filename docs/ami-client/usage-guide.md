@@ -1,21 +1,21 @@
-# AMI Client for Laravel 12
+# AMI Client Usage Guide
 
-## 1) Overview
+This guide provides a comprehensive overview of how to integrate and use the `apn/ami-client` package in a Laravel 12 application.
 
-The `apn/ami-client` package is a high-performance, non-blocking Asterisk Manager Interface (AMI) client specifically designed for Laravel 12 and PHP 8.4+. 
+## 1. Overview
 
-It is built for "dialer-grade" applications where stability and throughput are critical. Unlike traditional blocking AMI clients, this package uses a non-blocking I/O multiplexing model, making it ideal for:
-- **High-throughput dialers:** Managing hundreds of concurrent calls.
-- **Asterisk Clusters:** Seamlessly interacting with multiple Asterisk nodes.
-- **Long-lived Workers:** Stable CLI processes that listen for events 24/7 without memory leaks.
+The `apn/ami-client` package is a high-performance, non-blocking Asterisk Manager Interface (AMI) client designed for long-lived CLI workers and dialer-grade applications.
 
-### High-Level Architecture
-- **Core Layer:** Framework-agnostic logic for protocol framing, parsing, and correlation.
-- **Transport Layer:** Non-blocking TCP socket management using `stream_select`.
-- **Correlation Engine:** Maps ActionIDs to Responses and manages their lifecycle.
-- **Laravel Bridge:** Provides Facades, Service Providers, and Artisan commands for deep integration.
+### Key Features:
+- **Multi-Server Support**: Manage connections to multiple Asterisk nodes via a single manager.
+- **Non-Blocking I/O**: Driven by a deterministic tick loop, ensuring responsiveness even under high load.
+- **Typed Actions**: Built-in support for common AMI actions like `Login`, `Ping`, `Originate`, and `Command`.
+- **Event-Driven**: Flexible event subscription model for handling Asterisk events.
+- **Production Ready**: Includes backpressure handling, circuit breakers, and exponential backoff for reconnections.
 
-## 2) Installation
+---
+
+## 2. Installation
 
 Install the package via Composer:
 
@@ -23,287 +23,307 @@ Install the package via Composer:
 composer require apn/ami-client
 ```
 
-### Service Provider
-The package uses Laravel 12's auto-discovery. If you need to register it manually, add the service provider to your `bootstrap/providers.php` (for Laravel 11+) or `config/app.php`:
-
-```php
-return [
-    Apn\AmiClient\Laravel\AmiClientServiceProvider::class,
-];
-```
+The package will automatically register its Service Provider and Facade in Laravel 12.
 
 ### Publishing Configuration
-Publish the configuration file to your `config` directory:
+
+Publish the default configuration file to `config/ami-client.php`:
 
 ```bash
 php artisan vendor:publish --tag=ami-config
 ```
 
-## 3) Configuration
+---
 
-The configuration file `config/ami-client.php` allows you to define multiple server nodes and global defaults.
+## 3. Configuration
 
-### Example Configuration
+The configuration file allows you to define multiple Asterisk servers and global options.
+
+### Example `config/ami-client.php`
 
 ```php
-<?php
-
-declare(strict_types=1);
-
 return [
+    // Default server used when no specific server is requested
     'default' => env('AMI_DEFAULT_SERVER', 'node_1'),
 
     'servers' => [
         'node_1' => [
             'host' => env('AMI_NODE1_HOST', '127.0.0.1'),
             'port' => env('AMI_NODE1_PORT', 5038),
-            'username' => env('AMI_NODE1_USERNAME'),
-            'secret' => env('AMI_NODE1_SECRET'),
-            'connect_timeout' => 10,
+            'username' => env('AMI_NODE1_USERNAME', 'admin'),
+            'secret' => env('AMI_NODE1_SECRET', 'amp111'),
+            'timeout' => 30,
+            // TLS Support (requires Asterisk configured for AMI-over-TLS)
+            'tls' => env('AMI_NODE1_TLS', false),
         ],
         'node_2' => [
-            'host' => env('AMI_NODE2_HOST', '127.0.0.1'),
+            'host' => env('AMI_NODE2_HOST', '10.0.0.2'),
             'port' => env('AMI_NODE2_PORT', 5038),
-            'username' => env('AMI_NODE2_USERNAME'),
-            'secret' => env('AMI_NODE2_SECRET'),
-            'connect_timeout' => 10,
+            'username' => env('AMI_NODE2_USERNAME', 'admin'),
+            'secret' => env('AMI_NODE2_SECRET', 'amp111'),
+            'timeout' => 30,
         ],
     ],
 
     'options' => [
         'connect_timeout' => 10,
+        'read_timeout' => 30,
+        'heartbeat_interval' => 15,
         'max_pending_actions' => 5000,
         'event_queue_capacity' => 10000,
-        'memory_limit' => 128 * 1024 * 1024, // 128MB
-        'blocked_events' => ['FullyBooted', 'RTCPSent'],
+        'write_buffer_limit' => 5242880, // 5MB
     ],
+
+    // Dispatch AMI events via Laravel's native event system
+    'bridge_laravel_events' => env('AMI_BRIDGE_LARAVEL_EVENTS', false),
 ];
 ```
 
-### Recommended .env Variables
+### Recommended `.env` variables
 
 ```env
 AMI_DEFAULT_SERVER=node_1
-
-AMI_NODE1_HOST=10.0.0.5
+AMI_NODE1_HOST=127.0.0.1
+AMI_NODE1_PORT=5038
 AMI_NODE1_USERNAME=admin
-AMI_NODE1_SECRET=your_secure_password
-
-AMI_NODE2_HOST=10.0.0.6
-AMI_NODE2_USERNAME=admin
-AMI_NODE2_SECRET=your_secure_password
+AMI_NODE1_SECRET=amp111
+AMI_BRIDGE_LARAVEL_EVENTS=false
 ```
 
-## 4) Basic Usage (Single Server)
+---
 
-You can interact with the default AMI server using the `Ami` facade or by type-hinting `AmiClientManager`.
+## 4. Basic Usage (Single Server)
 
-### Sending Actions
+You can interact with the default AMI server using the `Ami` facade or by injecting `AmiClientManager`.
+
+### Sending Simple Actions
 
 ```php
 use Apn\AmiClient\Laravel\Ami;
 use Apn\AmiClient\Protocol\Ping;
-use Apn\AmiClient\Protocol\SetVar;
-use Apn\AmiClient\Protocol\GetVar;
 
-// Ping the server
-Ami::default()->send(new Ping())
-    ->onComplete(function (?Throwable $e, ?Response $r) {
-        if ($r?->isSuccess()) {
-            dump("Pong received!");
-        }
-    });
+// Send a Ping action to the default server
+Ami::default()->send(new Ping())->onComplete(function ($e, $response) {
+    if ($response?->isSuccess()) {
+        // Handling success
+    }
+});
+```
+
+### Get/Set Variables
+
+```php
+use Apn\AmiClient\Protocol\GetVar;
+use Apn\AmiClient\Protocol\SetVar;
 
 // Set a channel variable
-Ami::send(new SetVar(
-    variable: 'MY_VAR', 
-    value: '123', 
+Ami::default()->send(new SetVar(
+    variable: 'MY_VAR',
+    value: '123',
     channel: 'PJSIP/101-00000001'
 ));
 
-// Execution requires a tick
-Ami::default()->tick();
+// Get a channel variable
+Ami::default()->send(new GetVar(
+    variable: 'MY_VAR',
+    channel: 'PJSIP/101-00000001'
+))->onComplete(function ($e, $response) {
+    if ($response) {
+        $value = $response->getHeader('Value');
+    }
+});
 ```
 
-## 5) Multi-Server Usage
+---
 
-The `AmiClientManager` (via the `Ami` facade) makes it easy to route actions to specific nodes.
+## 5. Multi-Server Usage
+
+The `AmiClientManager` handles routing and server selection.
+
+### Targeting Specific Servers
 
 ```php
 use Apn\AmiClient\Laravel\Ami;
-use Apn\AmiClient\Protocol\Ping;
 
 // Send to a specific server
-Ami::server('node_b')->send(new Ping());
+Ami::server('node_2')->send(new Ping());
 
-// Use a specific routing strategy (e.g. Round Robin)
-$client = Ami::routing(new RoundRobinRoutingStrategy())->select();
-$client->send(new Ping());
+// Use the default server
+Ami::default()->send(new Ping());
+```
 
-// Execute processing for ALL servers in a loop
+### Managed Loop for All Servers
+
+In a long-lived worker, you should tick all connections to handle I/O and timeouts.
+
+```php
 while (true) {
-    Ami::tickAll(100); // 100ms timeout
+    Ami::tickAll(timeoutMs: 100);
 }
 ```
 
-## 6) Originate Example (Async Completion)
+---
 
-AMI `Originate` is complex because it returns an immediate "Response" (stating if the action was accepted) and later an "OriginateResponse" event (stating if the call actually connected).
+## 6. Originate Example (Async Completion)
+
+`Originate` is often used to initiate calls. It can return an immediate response (success/failure of the request) and later trigger events indicating the call outcome.
 
 ```php
-use Apn\AmiClient\Laravel\Ami;
 use Apn\AmiClient\Protocol\Originate;
+use Apn\AmiClient\Exceptions\AmiTimeoutException;
 
-$action = new Originate(
-    channel: 'PJSIP/101',
-    exten: '200',
-    context: 'from-internal',
-    priority: 1,
-    async: true,
-    variables: ['source' => 'api_call']
-);
+try {
+    $pending = Ami::default()->send(new Originate(
+        channel: 'PJSIP/101',
+        exten: '500',
+        context: 'default',
+        priority: 1,
+        async: true
+    ));
 
-Ami::send($action)->onComplete(function ($e, $response) {
-    if ($e) {
-        // Handle timeout or connection loss
-        return;
-    }
-    
-    if ($response->isSuccess()) {
-        // Action accepted by Asterisk
-    }
-});
+    $pending->onComplete(function ($exception, $response) {
+        if ($exception) {
+            // The request itself timed out or failed
+        }
+        
+        if ($response?->isSuccess()) {
+            // Asterisk accepted the originate request
+        }
+    });
+} catch (AmiTimeoutException $e) {
+    // This could be thrown if the write queue is full and a timeout is triggered
+}
 ```
 
-To capture the final result, subscribe to the `OriginateResponse` event:
+> **Note**: For tracking the actual call state (e.g., when the call is answered), you should subscribe to `OriginateResponse` or `Newchannel` events using the generated `ActionID`.
 
-```php
-Ami::onEvent('OriginateResponse', function ($event) {
-    if ($event->get('Response') === 'Success') {
-        Log::info("Call connected!", ['Channel' => $event->get('Channel')]);
-    }
-});
-```
+---
 
-## 7) Command / Generic Action Example
+## 7. Command / Generic Action Example
 
-For actions not yet typed in the package, use `GenericAction`. For CLI commands, use `Command`.
+### Running CLI Commands
 
-### Command (Response: Follows)
+The `Command` action handles multi-line "Follows" responses automatically.
 
 ```php
 use Apn\AmiClient\Protocol\Command;
 
-Ami::send(new Command('pjsip show endpoints'))
-    ->onComplete(function ($e, $r) {
-        // 'Follows' responses contain the CLI output in the 'RawOutput' parameter
-        $output = $r->get('RawOutput');
-        dump($output);
-    });
+Ami::default()->send(new Command('core show channels'))->onComplete(function ($e, $response) {
+    $output = $response?->getHeader('Output'); // Array of lines or raw string
+});
 ```
 
-### GenericAction
+### Generic Actions
+
+For actions not yet explicitly typed in the package, use `GenericAction`.
 
 ```php
 use Apn\AmiClient\Protocol\GenericAction;
 
-$action = new GenericAction('QueueSummary', [
+Ami::default()->send(new GenericAction('QueueSummary', [
     'Queue' => 'support'
-]);
-
-Ami::send($action);
+]))->onComplete(function ($e, $response) {
+    // Handle response
+});
 ```
 
-## 8) Event Handling & Subscriptions
+---
 
-Subscriptions allow you to react to Asterisk events in real-time.
+## 8. Event Handling & Subscriptions
+
+You can subscribe to events globally via the manager.
+
+### Specific Event Subscription
 
 ```php
 use Apn\AmiClient\Laravel\Ami;
+use Apn\AmiClient\Events\AmiEvent;
 
-// Listen for a specific event
-Ami::onEvent('Hangup', function ($event) {
-    $channel = $event->get('Channel');
-    $cause = $event->get('Cause-txt');
-    
-    Log::info("Channel hung up", compact('channel', 'cause'));
-});
-
-// Catch-all listener
-Ami::onAnyEvent(function ($event) {
-    if ($event->getName() === 'Newchannel') {
-        // Handle new channel
-    }
+Ami::onEvent('Hangup', function (AmiEvent $event) {
+    Log::info('Channel hung up', [
+        'channel' => $event->getHeader('Channel'),
+        'cause' => $event->getHeader('Cause-txt'),
+    ]);
 });
 ```
 
-> **Warning:** Listeners are executed within the main `tick()` loop. **Never perform blocking operations** (like slow database queries or external API calls) inside a listener. Use Laravel's `dispatch()` to offload heavy work to a queue.
+### Catch-All Subscription
 
-## 9) Running Workers (Production Pattern)
+```php
+Ami::onAnyEvent(function (AmiEvent $event) {
+    // Process every event from every server
+});
+```
 
-For event listening and background processing, run a dedicated Artisan worker for each server.
+> **Backpressure Warning**: Listeners must be non-blocking. If you need to perform heavy processing (e.g., DB writes), dispatch a Laravel Job.
+
+---
+
+## 9. Running Workers (Production Pattern)
+
+For production, run a dedicated worker process for each server using the provided artisan command.
 
 ### Artisan Command
-```bash
-# Listen to a specific server
-php artisan ami:listen --server=node_1
 
-# Listen to all servers (multiplexed in one process)
-php artisan ami:listen --all
+```bash
+# Listen to node_1
+php artisan ami:listen --server=node_1
 ```
 
-### Supervisor Example
-Ensure your workers are automatically restarted by Supervisor:
+### Supervisor Configuration Example
 
 ```ini
 [program:ami-worker-node1]
-command=php /var/www/artisan ami:listen --server=node_1
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/html/artisan ami:listen --server=node_1
 autostart=true
 autorestart=true
 user=www-data
-redirect_stderr=true
-stdout_logfile=/var/www/storage/logs/ami-worker.log
+numprocs=1
+stopwaitsecs=30
 ```
 
-## 10) Observability
+### Graceful Shutdown
 
-The package uses structured JSON logging and supports Prometheus-compatible metrics.
+The `ami:listen` command automatically handles `SIGTERM` and `SIGINT`, ensuring outbound buffers are flushed and connections are closed cleanly.
+
+---
+
+## 10. Observability
 
 ### Structured Logging
-Logs include:
-- `server_key`: The ID of the node.
-- `action_id`: Correlates logs with specific AMI actions.
-- `worker_pid`: Identifies the worker process.
 
-### Metrics to Monitor
-If you implement a metrics collector, track:
-- `ami_dropped_events`: Indicates if your listeners are too slow (backpressure).
+The package emits JSON-formatted logs. Ensure your logger is configured to capture:
+- `server_key`
+- `action_id`
+- `worker_pid`
+
+### Metrics
+
+If a `MetricsCollector` is configured, the following metrics are tracked:
 - `ami_action_latency_ms`: Histogram of action execution time.
-- `ami_connection_status`: 1 for healthy, 0 for disconnected.
+- `ami_event_count`: Counter of received events per type.
+- `ami_dropped_events`: Counter of events dropped due to queue capacity.
+- `ami_connection_status`: Gauge (1 for healthy, 0 for disconnected).
 
-## 11) Best Practices (Dialer-Grade)
+---
 
-1. **No Blocking in Listeners:** Always dispatch heavy tasks to Laravel's queue.
-2. **Bounded Queues:** Monitor `dropped_events` to ensure your event loop is keeping up.
-3. **Health Validation:** Use `Ami::server('node_1')->isConnected()` before sending critical actions.
-4. **No Secret Logging:** The package automatically masks `Secret` and `Password` fields in logs. Never disable this in production.
-5. **Use Multi-Server Isolation:** If one Asterisk node hangs, the `AmiClientManager` ensures other nodes remain reachable.
+## 11. Best Practices (Dialer-Grade)
 
-## 12) Troubleshooting
+- **No Blocking in Listeners**: Never use `sleep()` or perform blocking I/O inside an `onEvent` callback.
+- **Bounded Queues**: Always configure `event_queue_capacity` and `write_buffer_limit` to prevent OOM.
+- **Health Validation**: Check `Ami::server('node_1')->getHealthStatus()->isAvailable()` before dispatching critical actions.
+- **Secret Redaction**: The package automatically masks `Secret` and `Password` in logs. Avoid logging sensitive `Variable` values manually.
 
-### Auth Failures
-- Verify `username` and `secret` in `config/ami-client.php`.
-- Check Asterisk's `manager.conf` for correct permissions (`read`, `write`) and IP whitelisting.
+---
 
-### No Events Received
-- Ensure you have sent the `Login` action (handled automatically by `AmiClientManager`).
-- Check if your user in `manager.conf` has `read = all` or specific event privileges.
+## 12. Troubleshooting
 
-### High CPU Usage
-- Usually caused by a tight loop with a 0ms timeout. Ensure `tick(100)` or similar is used in your workers to allow the CPU to rest.
-
-### Memory Growth
-- The client is audited for zero memory growth. If you see leaks, check your custom event listeners for static arrays or global variables that grow over time.
-
-### Queue Drops
-- If `ami_dropped_events` increases, it means the worker is processing events slower than Asterisk is sending them. Optimize your listeners or reduce the number of events subscribed to via `blocked_events` in config.
+| Issue | Potential Cause |
+| :--- | :--- |
+| **Auth Failures** | Incorrect `username` or `secret`; missing `read` or `write` permissions in `manager.conf`. |
+| **No Events Received** | `read` permissions missing in Asterisk; server is in `DEGRADED` state. |
+| **High CPU Usage** | `timeoutMs` in `tick()` or `tickAll()` is set to 0 in a tight loop without other work. |
+| **Memory Growth** | Large number of pending actions timing out; ensure `max_pending_actions` is bounded. |
+| **Queue Drops** | `event_queue_capacity` exceeded. Increase capacity or speed up event processing. |
+| **TLS Failures** | Certificate mismatch or Asterisk not configured for TLS on the specified port. |

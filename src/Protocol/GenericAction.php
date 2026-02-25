@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
-use Apn\AmiClient\Correlation\Strategies\SingleResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 
 /**
  * Generic AMI Action supporting arbitrary headers and parameters.
@@ -22,9 +22,9 @@ final readonly class GenericAction extends Action
         private string $actionName,
         array $parameters = [],
         ?string $actionId = null,
-        private ?CompletionStrategyInterface $strategy = null
+        ?CompletionStrategyInterface $strategy = null
     ) {
-        parent::__construct($parameters, $actionId);
+        parent::__construct($parameters, $actionId, $strategy);
     }
 
     /**
