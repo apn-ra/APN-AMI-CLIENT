@@ -9,7 +9,7 @@
 - **Top blocker 3 (P2):** Regex suppression in redaction (`@preg_match`, `@preg_replace`) can silently disable redaction patterns and hide config defects (`src/Core/SecretRedactor.php:106`, `src/Core/SecretRedactor.php:118`).
 - **Top blocker 4 (P2):** Optional hostname resolution uses `gethostbyname()` during manager bootstrap, introducing blocking DNS behavior outside reactor/tick path (`src/Cluster/AmiClientManager.php:462`).
 - **Top blocker 5 (P2):** Library-level signal handler hard-exits process (`exit(0)`), which is unsafe in embedded/worker runtimes (`src/Cluster/AmiClientManager.php:503`).
-- **Invariant compliance statement:** 9/10 hard invariants pass; **failed invariant:** “Listener exceptions cannot break dispatch loops” due to uncaught logger serialization failures.
+- **Invariant compliance statement:** 9/10 hard invariants pass; **failed invariant:** ï¿½Listener exceptions cannot break dispatch loopsï¿½ due to uncaught logger serialization failures.
 
 # 2. Scorecard (0-5)
 

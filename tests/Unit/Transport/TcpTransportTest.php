@@ -7,6 +7,8 @@ namespace Tests\Unit\Transport;
 use Apn\AmiClient\Transport\TcpTransport;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\ConnectionException;
+use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
+use Psr\Log\AbstractLogger;
 use PHPUnit\Framework\TestCase;
 
 class TcpTransportTest extends TestCase
@@ -329,5 +331,74 @@ class TcpTransportTest extends TestCase
         if ($client) {
             fclose($client);
         }
+    }
+
+    public function testReadFailureLogsErrorDetailsAndIncrementsMetrics(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public array $records = [];
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->records[] = [
+                    'level' => $level,
+                    'message' => (string) $message,
+                    'context' => $context,
+                ];
+            }
+        };
+
+        $metrics = new class implements MetricsCollectorInterface {
+            public array $increments = [];
+            public function increment(string $name, array $labels = [], int $amount = 1): void
+            {
+                $this->increments[] = [
+                    'name' => $name,
+                    'labels' => $labels,
+                    'amount' => $amount,
+                ];
+            }
+            public function record(string $name, float $value, array $labels = []): void {}
+            public function set(string $name, float $value, array $labels = []): void {}
+        };
+
+        $transport = new TcpTransport(
+            $this->host,
+            $this->port,
+            logger: $logger,
+            metrics: $metrics,
+            labels: [
+                'server_key' => 'node1',
+                'server_host' => $this->host,
+            ]
+        );
+
+        $ref = new \ReflectionProperty(TcpTransport::class, 'resource');
+        $ref->setAccessible(true);
+        $ref->setValue($transport, stream_context_create());
+
+        $transport->read();
+
+        $logRecord = null;
+        foreach ($logger->records as $record) {
+            if ($record['message'] === 'Transport operation failed'
+                && ($record['context']['operation'] ?? '') === 'read') {
+                $logRecord = $record;
+                break;
+            }
+        }
+
+        $this->assertNotNull($logRecord);
+        $this->assertSame('node1', $logRecord['context']['server_key'] ?? null);
+        $this->assertNotNull($logRecord['context']['error_message'] ?? null);
+
+        $foundMetric = false;
+        foreach ($metrics->increments as $increment) {
+            if ($increment['name'] === 'ami_transport_errors_total'
+                && ($increment['labels']['operation'] ?? '') === 'read') {
+                $foundMetric = true;
+                break;
+            }
+        }
+        $this->assertTrue($foundMetric);
     }
 }

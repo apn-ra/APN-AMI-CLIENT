@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Protocol;
 
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
 use Apn\AmiClient\Exceptions\ParserDesyncException;
 use Apn\AmiClient\Exceptions\ProtocolException;
 
@@ -15,6 +16,7 @@ use Apn\AmiClient\Exceptions\ProtocolException;
  */
 class Parser
 {
+    private const int FRAME_DELIMITER_BYTES = 4; // \r\n\r\n
     private const int MIN_FRAME_SIZE = 65536; // 64KB
     private const int DEFAULT_FRAME_SIZE = 1048576; // 1MB
     private const int MAX_FRAME_SIZE = 4194304; // 4MB
@@ -26,8 +28,21 @@ class Parser
 
     public function __construct(int $bufferCap = 2097152, int $maxFrameSize = self::DEFAULT_FRAME_SIZE)
     {
+        $effectiveMaxFrameSize = max(self::MIN_FRAME_SIZE, min(self::MAX_FRAME_SIZE, $maxFrameSize));
+        $minimumBufferCap = $effectiveMaxFrameSize + self::FRAME_DELIMITER_BYTES;
+
+        if ($bufferCap < $minimumBufferCap) {
+            throw new InvalidConfigurationException(sprintf(
+                'Invalid parser configuration: bufferCap=%d is smaller than maxFrameSize=%d plus delimiterBytes=%d (minimum=%d).',
+                $bufferCap,
+                $effectiveMaxFrameSize,
+                self::FRAME_DELIMITER_BYTES,
+                $minimumBufferCap
+            ));
+        }
+
         $this->bufferCap = $bufferCap;
-        $this->maxFrameSize = max(self::MIN_FRAME_SIZE, min(self::MAX_FRAME_SIZE, $maxFrameSize));
+        $this->maxFrameSize = $effectiveMaxFrameSize;
     }
 
     /**

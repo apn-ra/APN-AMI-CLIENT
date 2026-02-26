@@ -78,4 +78,20 @@ class LoggerTest extends TestCase
         $decoded = json_decode($output, true);
         $this->assertSame(42, $decoded['queue_depth']);
     }
+
+    public function testFallbackOutputWhenJsonEncodingFails(): void
+    {
+        $logger = new Logger();
+        $invalidUtf8 = "bad \xC3\x28";
+
+        ob_start();
+        $logger->info('fallback-test', ['server_key' => 'srv1', 'bad' => $invalidUtf8]);
+        $output = ob_get_clean();
+
+        $this->assertIsString($output);
+        $this->assertStringContainsString('LOG_FALLBACK', $output);
+        $this->assertStringContainsString('level=INFO', $output);
+        $this->assertStringContainsString('server_key=srv1', $output);
+        $this->assertStringContainsString('message=fallback-test', $output);
+    }
 }

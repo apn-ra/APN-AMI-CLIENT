@@ -18,6 +18,7 @@ use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Protocol\Logoff;
 use Apn\AmiClient\Core\EventQueue;
+use Apn\AmiClient\Core\Logger;
 use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
@@ -280,6 +281,44 @@ class AmiClientTest extends TestCase
 
         $this->assertEquals(2, $specificCalls);
         $this->assertEquals(2, $anyCalls);
+    }
+
+    public function testListenerExceptionsDoNotBreakDispatchWhenLoggerSerializationFails(): void
+    {
+        $transport = $this->createMock(TransportInterface::class);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $client = new AmiClient('node1', $transport, $correlation, logger: new Logger());
+
+        $transport->method('isConnected')->willReturn(true);
+        $client->processTick(); // Move to READY
+
+        $specificCalls = 0;
+        $anyCalls = 0;
+        $invalidMessage = "bad \xC3\x28";
+
+        $client->onEvent('TestEvent', function () use ($invalidMessage): void {
+            throw new \RuntimeException($invalidMessage);
+        });
+        $client->onEvent('TestEvent', function () use (&$specificCalls): void {
+            $specificCalls++;
+        });
+        $client->onAnyEvent(function () use (&$anyCalls): void {
+            $anyCalls++;
+        });
+
+        $ref = new \ReflectionProperty(AmiClient::class, 'eventQueue');
+        $eventQueue = $ref->getValue($client);
+        $eventQueue->push(AmiEvent::create(new Event(['event' => 'TestEvent']), 'node1'));
+        $eventQueue->push(AmiEvent::create(new Event(['event' => 'TestEvent']), 'node1'));
+
+        ob_start();
+        $client->processTick();
+        $output = ob_get_clean();
+
+        $this->assertEquals(2, $specificCalls);
+        $this->assertEquals(2, $anyCalls);
+        $this->assertSame(HealthStatus::READY, $client->getHealthStatus());
+        $this->assertStringContainsString('LOG_FALLBACK', $output);
     }
 
     public function testPendingCallbackExceptionsAreIsolatedAndDoNotBreakSubsequentActions(): void

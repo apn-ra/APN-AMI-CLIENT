@@ -52,7 +52,7 @@ return [
         // Max ActionID length (bounded internally to 64..256).
         'max_action_id_length' => 128,
         // Production hostname policy: true requires literal IP endpoints (no DNS in tick/reconnect paths).
-        // If false, hostnames are resolved and cached at bootstrap; transports only use pre-resolved IPs.
+        // If false, hostnames still require pre-resolved IPs or an injected resolver at bootstrap.
         'enforce_ip_endpoints' => true,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.

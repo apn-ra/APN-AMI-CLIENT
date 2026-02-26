@@ -27,4 +27,19 @@ final class AmiClientManagerTest extends TestCase
 
         new AmiClientManager($registry, new ClientOptions(enforceIpEndpoints: true));
     }
+
+    public function testRejectsHostnameWithoutResolverWhenIpPolicyDisabled(): void
+    {
+        $registry = new ServerRegistry();
+        $registry->add(new ServerConfig(
+            key: 'node1',
+            host: 'example.test',
+            port: 5038
+        ));
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('pre-resolved IP or an injected hostname resolver');
+
+        new AmiClientManager($registry, new ClientOptions(enforceIpEndpoints: false));
+    }
 }

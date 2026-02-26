@@ -477,9 +477,11 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 | Batch ID | Date | Summary | Task IDs |
 | --- | --- | --- | --- |
 | BATCH-PR-20260226-02 | 2026-02-26 | Parser/Correlation/Logging/Security Hardening | PR2-P1-01 Ã¢â‚¬Â¦ PR2-P2-05 |
-| BATCH-PR-20260226-03 | 2026-02-26 | Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring | PR3-P1-01 … PR3-P3-01 |
+| BATCH-PR-20260226-03 | 2026-02-26 | Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring | PR3-P1-01 ï¿½ PR3-P3-01 |
 | BATCH-PR-20260226-04 | 2026-02-26 | Non-Blocking DNS + Async Connect Verification + Redaction | PR4-P1-01 ... PR4-P3-02 |
 | BATCH-PR-20260226-05 | 2026-02-26 | Transport/Logger/Error-Path Hardening | PR5-P1-01 ... PR5-P2-03 |
+| BATCH-PR-20260226-06 | 2026-02-26 | Callback Exception Observability + Parser Config Guardrails | PR6-P2-01 ... PR6-P2-04 |
+| BATCH-PR-20260226-07 | 2026-02-26 | Session-Boundary Write Safety + Non-Blocking/Log-Storm Controls | PR7-P0-01 ... PR7-P2-01 |
 
 ### Delta 2026-02-26 (BATCH-PR-20260226-02): Parser/Correlation/Logging/Security Hardening
 
@@ -587,35 +589,35 @@ New/Updated Invariants:
 
 ### Delta 2026-02-26 (BATCH-PR-20260226-05): Transport/Logger/Error-Path Hardening
 
-### P1 — Transport/Selector Error Suppression Removal
+### P1 ï¿½ Transport/Selector Error Suppression Removal
 Problem description: Transport and selector operations suppress errors via @, which hides failures and prevents deterministic failure handling.
 Dialer impact: Silent stalls and delayed reconnects during network faults; reduced observability during outages.
 Required invariant: Transport/selector errors are observable and never silently suppressed.
 Concrete implementation direction: Remove @ operators from socket/selector calls, capture native error details (error_get_last() and errno where available), and emit structured warning/metrics before controlled close/retry.
 Tasks: PR5-P1-01
 
-### P1 — Logger Non-Throwing Under Serialization Failure
+### P1 ï¿½ Logger Non-Throwing Under Serialization Failure
 Problem description: Logger can throw JsonException during exception reporting, breaking listener isolation and dispatch loops.
 Dialer impact: A single malformed log context can terminate event dispatch for the tick and violate isolation guarantees.
 Required invariant: Listener exceptions cannot break dispatch loops; logging must be non-throwing.
 Concrete implementation direction: Wrap Logger::log() serialization/output in internal try/catch, fall back to minimal plain-text output on encoding failure, and never throw from logger paths.
 Tasks: PR5-P1-02
 
-### P2 — Redaction Regex Validation Without Suppression
+### P2 ï¿½ Redaction Regex Validation Without Suppression
 Problem description: Redaction regex evaluation is suppressed, so invalid patterns fail silently and disable redaction.
 Dialer impact: Secrets can leak in logs due to hidden configuration defects.
 Required invariant: Invalid redaction patterns fail fast; redaction never silently disabled.
 Concrete implementation direction: Validate redaction patterns at construction, remove suppression operators, and throw InvalidConfigurationException on invalid patterns; log/metric failed evaluations deterministically.
 Tasks: PR5-P2-01
 
-### P2 — Remove Blocking DNS From Manager Bootstrap
+### P2 ï¿½ Remove Blocking DNS From Manager Bootstrap
 Problem description: gethostbyname() is used during manager bootstrap for optional hostname resolution.
 Dialer impact: DNS latency can block startup/reload, delaying readiness and failover.
 Required invariant: No blocking DNS resolution in runtime-critical paths.
 Concrete implementation direction: Keep IP-only policy default; if hostname mode is enabled, require pre-resolved addresses via config loader or resolver injection outside runtime-critical paths.
 Tasks: PR5-P2-02
 
-### P2 — Library Signal Handler Must Not Exit Process
+### P2 ï¿½ Library Signal Handler Must Not Exit Process
 Problem description: Signal handler calls exit(0) from library code.
 Dialer impact: Embedded runtimes can be terminated unexpectedly, impacting unrelated workloads.
 Required invariant: Library code must not terminate the host process.
@@ -626,3 +628,67 @@ New/Updated Invariants:
 - Listener exceptions cannot break dispatch loops (logger must never throw).
 - No blocking DNS resolution in runtime-critical paths.
 - Library code must not terminate the host process.
+
+## Delta 2026-02-26 (BATCH-PR-20260226-06): Callback Exception Observability + Parser Config Guardrails
+
+### P2 - PendingAction callback exception reporting can be silent
+- Problem description: `PendingAction` callback exception handling can become silent when the callback exception handler is missing or when that handler throws.
+- Dialer impact: Application-visible callback failures can be lost, reducing incident observability and delaying production triage in long-running dialer workers.
+- Required invariant: Callback exception paths must always emit at least one observable signal (log line and/or metric), even when secondary handlers fail.
+- Concrete implementation direction: In `PendingAction::invokeCallback()`, add a deterministic fallback path that records callback exceptions when the handler is null or fails; wrap handler invocation in its own `try/catch` and emit structured fallback telemetry with server/action context.
+- Tasks: PR6-P2-01, PR6-P2-02
+
+### P2 - Parser buffer cap can be set below frame-size requirements
+- Problem description: Parser constructor currently allows `bufferCap` values that are smaller than `maxFrameSize` (+ delimiter), which can desync valid frames before frame-size checks are reached.
+- Dialer impact: Valid large AMI frames can force avoidable parser desync and reconnect churn under high-volume dialer traffic.
+- Required invariant: Parser configuration must fail fast unless `bufferCap >= maxFrameSize + delimiter_bytes` (or an explicitly documented stronger minimum).
+- Concrete implementation direction: Validate constructor/config invariants for parser sizing; throw `InvalidConfigurationException` on invalid relationships, and document the enforced formula in config and runtime profile docs.
+- Tasks: PR6-P2-03, PR6-P2-04
+
+New/Updated Invariants:
+- Callback exception handling is never silent, including handler-null and handler-throws branches.
+- Parser configuration is invalid unless `bufferCap` can safely contain at least one maximum-sized frame plus framing delimiter.
+
+## Delta 2026-02-26 (BATCH-PR-20260226-07): Session-Boundary Write Safety + Non-Blocking/Log-Storm Controls
+
+### P0 - Stale outbound bytes can leak across reconnect session boundaries
+- Problem description: `TcpTransport::close()` can preserve unsent bytes in `WriteBuffer`, allowing stale actions from a prior AMI session to flush after reconnect.
+- Dialer impact: Replayed stale actions can execute on PBX without matching live correlation state, causing untracked side effects and operational drift.
+- Required invariant: On non-graceful disconnect, outbound bytes from the prior session are never emitted after reconnect.
+- Concrete implementation direction: Add explicit close semantics that distinguish graceful vs non-graceful shutdown; clear or epoch-invalidate `WriteBuffer` on non-graceful close before any reconnect write-ready flush.
+- Tasks: PR7-P0-01
+
+### P1 - Tick-path logging must not perform synchronous stdout I/O
+- Problem description: Tick-path logging currently performs direct synchronous `echo` output.
+- Dialer impact: Slow log consumers can block tick progression and violate non-blocking runtime guarantees.
+- Required invariant: Tick-path logging is non-blocking and bounded under sink backpressure.
+- Concrete implementation direction: Replace direct stdout writes with a bounded logger sink/queue abstraction; log-drop behavior and counters must be deterministic when sink capacity is exceeded.
+- Tasks: PR7-P1-01
+
+### P1 - Per-drop warning logs create amplification storms under queue pressure
+- Problem description: Event-drop warnings are emitted per dropped event.
+- Dialer impact: Log amplification can consume tick budget and delay protocol/correlation processing during bursts.
+- Required invariant: Drop telemetry is rate-limited/coalesced while preserving accurate dropped-event counters.
+- Concrete implementation direction: Add interval-based drop summary logging (`dropped_delta`, queue depth, server key) and enforce a fixed maximum warning rate per interval.
+- Tasks: PR7-P1-02
+
+### P1 - Laravel listener loop busy-spins without blocking/yield
+- Problem description: `ami:listen` uses a tight `while (true)` loop with repeated poll calls and no bounded wait/yield.
+- Dialer impact: Worker can pin CPU and degrade host stability in multi-tenant dialer environments.
+- Required invariant: Laravel worker loop must use bounded blocking tick or controlled yield when idle.
+- Concrete implementation direction: Update listen loop to call `tickAll()`/`tick()` with a bounded timeout (for example 10-50ms) or deterministic idle sleep; expose loop cadence as config/option.
+- Tasks: PR7-P1-03
+
+### P2 - Non-blocking runtime contract is not enforced at API boundary
+- Problem description: Public APIs allow blocking timeouts (`timeoutMs > 0`) in runtime-critical paths.
+- Dialer impact: Production loops can accidentally enter blocking select behavior and violate scheduling/fairness assumptions.
+- Required invariant: Production runtime APIs are explicitly non-blocking by default and reject/segregate blocking mode.
+- Concrete implementation direction: Clamp runtime loop paths to non-blocking timeout (`0`) or split APIs into explicit non-blocking vs blocking variants with clear contracts and validation.
+- Tasks: PR7-P2-01
+
+New/Updated Invariants:
+- Non-graceful disconnect must purge or invalidate unsent outbound bytes before reconnect flush.
+- Tick-path logging must be non-blocking and bounded under backpressure.
+- Event-drop telemetry must be coalesced/rate-limited with deterministic counters.
+- Laravel listen loop must not busy-spin.
+- Production runtime path must enforce explicit non-blocking timeout semantics.

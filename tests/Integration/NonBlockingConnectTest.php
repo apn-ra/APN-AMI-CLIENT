@@ -203,7 +203,12 @@ class NonBlockingConnectTest extends TestCase
             maxConnectAttemptsPerTick: 1
         );
 
-        $manager = new AmiClientManager($registry, $options, reactor: new Reactor());
+        $manager = new AmiClientManager(
+            $registry,
+            $options,
+            reactor: new Reactor(),
+            hostnameResolver: static fn (string $host): string => DnsTestHook::resolve($host)
+        );
 
         $this->assertSame(1, DnsTestHook::getCallCount(), 'Hostname resolution should occur only at bootstrap.');
 

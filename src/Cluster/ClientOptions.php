@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Cluster;
 
+use Apn\AmiClient\Core\SecretRedactor;
+
 /**
  * Global configuration DTO for AMI clients.
  */
@@ -69,6 +71,15 @@ readonly class ClientOptions
             maxConnectAttemptsPerTick: $options['max_connect_attempts_per_tick'] ?? 5,
             enforceIpEndpoints: $options['enforce_ip_endpoints'] ?? true,
             lazy: $options['lazy'] ?? true,
+        );
+    }
+
+    public function createRedactor(): SecretRedactor
+    {
+        return new SecretRedactor(
+            $this->redactionKeys,
+            $this->redactionKeyPatterns,
+            $this->redactionValuePatterns
         );
     }
 }

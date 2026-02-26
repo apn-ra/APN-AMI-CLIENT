@@ -258,6 +258,18 @@ class ParserTest extends TestCase
         $this->assertSame($payload, $message->getHeader('payload'));
     }
 
+    public function test_it_accepts_boundary_buffer_cap_equal_to_max_frame_plus_delimiter(): void
+    {
+        $parser = new Parser(bufferCap: 65540, maxFrameSize: 65536);
+        $payload = str_repeat('C', 65440);
+        $parser->push("Response: Success\r\nActionID: boundary-ok\r\nPayload: {$payload}\r\n\r\n");
+
+        $message = $parser->next();
+        $this->assertInstanceOf(Response::class, $message);
+        $this->assertEquals('boundary-ok', $message->getActionId());
+        $this->assertSame($payload, $message->getHeader('payload'));
+    }
+
     public function test_it_recovers_without_corrupting_next_frame_after_oversize_failure(): void
     {
         $parser = new Parser(maxFrameSize: 65536);

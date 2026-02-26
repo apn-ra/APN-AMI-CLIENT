@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Transport;
 
 use Apn\AmiClient\Core\Contracts\TransportInterface;
+use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
+use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\ConnectionException;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
  * TCP transport implementation using non-blocking stream sockets.
@@ -20,6 +24,11 @@ class TcpTransport implements TransportInterface
     private bool $connected = false;
 
     private readonly WriteBuffer $writeBuffer;
+    private readonly LoggerInterface $logger;
+    private readonly MetricsCollectorInterface $metrics;
+    /** @var array<string, string> */
+    private array $labels;
+    private readonly string $serverKey;
 
     /** @var callable(string): void|null */
     private $onDataCallback = null;
@@ -31,8 +40,21 @@ class TcpTransport implements TransportInterface
         int $writeBufferLimit = 5242880,
         private readonly int $maxBytesReadPerTick = 1048576,
         private readonly bool $enforceIpEndpoints = true,
+        ?LoggerInterface $logger = null,
+        ?MetricsCollectorInterface $metrics = null,
+        array $labels = [],
     ) {
         $this->writeBuffer = new WriteBuffer($writeBufferLimit);
+        $this->logger = $logger ?? new NullLogger();
+        $this->metrics = $metrics ?? new NullMetricsCollector();
+        $this->labels = $labels;
+        $this->serverKey = $labels['server_key'] ?? 'unknown';
+        if (!isset($this->labels['server_key'])) {
+            $this->labels['server_key'] = $this->serverKey;
+        }
+        if (!isset($this->labels['server_host'])) {
+            $this->labels['server_host'] = $this->host;
+        }
     }
 
     /**
@@ -58,15 +80,22 @@ class TcpTransport implements TransportInterface
         $errstr = '';
 
         // Use async connect to avoid blocking the tick loop.
-        $resource = @stream_socket_client(
-            $remote,
-            $errno,
-            $errstr,
-            0.0,
-            STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT
-        );
+        [$resource, $error] = $this->captureError(function () use ($remote, &$errno, &$errstr) {
+            return stream_socket_client(
+                $remote,
+                $errno,
+                $errstr,
+                0.0,
+                STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT
+            );
+        });
 
         if ($resource === false || !is_resource($resource)) {
+            $this->logTransportError('connect', $error, [
+                'error_code' => $errno,
+                'error_message' => $errstr,
+                'remote' => $remote,
+            ]);
             throw new ConnectionException(sprintf(
                 "Could not connect to %s: [%d] %s",
                 $remote,
@@ -76,7 +105,19 @@ class TcpTransport implements TransportInterface
         }
 
         // Guideline 2: All socket operations must use non-blocking mode.
-        stream_set_blocking($resource, false);
+        [$blockingSet, $blockingError] = $this->captureError(function () use ($resource) {
+            return stream_set_blocking($resource, false);
+        });
+        if ($blockingSet !== true) {
+            $this->logTransportError('set_blocking', $blockingError, [
+                'remote' => $remote,
+            ]);
+            $this->close();
+            throw new ConnectionException(sprintf(
+                "Could not configure non-blocking mode for %s",
+                $remote
+            ));
+        }
         $this->resource = $resource;
         $this->connecting = true;
         $this->connected = false;
@@ -88,7 +129,12 @@ class TcpTransport implements TransportInterface
     public function close(): void
     {
         if ($this->resource !== null && is_resource($this->resource)) {
-            @fclose($this->resource);
+            [$closed, $error] = $this->captureError(function () {
+                return fclose($this->resource);
+            });
+            if ($closed === false) {
+                $this->logTransportError('close', $error);
+            }
         }
         $this->resource = null;
         $this->connecting = false;
@@ -168,9 +214,17 @@ class TcpTransport implements TransportInterface
         $microseconds = ($timeoutMs % 1000) * 1000;
 
         // Perform I/O multiplexing.
-        $ready = @stream_select($read, $write, $except, $seconds, $microseconds);
+        [$ready, $error] = $this->captureError(function () use (&$read, &$write, &$except, $seconds, $microseconds) {
+            return stream_select($read, $write, $except, $seconds, $microseconds);
+        });
 
-        if ($ready === false || $ready === 0) {
+        if ($ready === false) {
+            $this->logTransportError('stream_select', $error);
+            $this->close();
+            return;
+        }
+
+        if ($ready === 0) {
             return;
         }
 
@@ -199,9 +253,12 @@ class TcpTransport implements TransportInterface
 
         while ($bytesRead < $maxToRead) {
             $chunkSize = min(8192, $maxToRead - $bytesRead);
-            $data = @fread($this->resource, $chunkSize);
+            [$data, $error] = $this->captureError(function () use ($chunkSize) {
+                return fread($this->resource, $chunkSize);
+            });
 
             if ($data === false) {
+                $this->logTransportError('read', $error);
                 $this->close();
                 return;
             }
@@ -239,9 +296,12 @@ class TcpTransport implements TransportInterface
         }
 
         $data = $this->writeBuffer->content();
-        $written = fwrite($this->resource, $data);
+        [$written, $error] = $this->captureError(function () use ($data) {
+            return fwrite($this->resource, $data);
+        });
 
         if ($written === false) {
+            $this->logTransportError('write', $error);
             $this->close();
             return;
         }
@@ -312,17 +372,23 @@ class TcpTransport implements TransportInterface
      */
     protected function getSocketError($resource): ?int
     {
-        $socket = @socket_import_stream($resource);
+        [$socket, $importError] = $this->captureError(function () use ($resource) {
+            return socket_import_stream($resource);
+        });
         if ($socket === false) {
+            $this->logTransportError('socket_import_stream', $importError);
             return null;
         }
 
-        $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
-        if (!is_int($error)) {
+        [$errorValue, $optionError] = $this->captureError(function () use ($socket) {
+            return socket_get_option($socket, SOL_SOCKET, SO_ERROR);
+        });
+        if (!is_int($errorValue)) {
+            $this->logTransportError('socket_get_option', $optionError);
             return null;
         }
 
-        return $error;
+        return $errorValue;
     }
 
     /**
@@ -357,7 +423,13 @@ class TcpTransport implements TransportInterface
      */
     protected function getPeerName($resource): string|false
     {
-        return @stream_socket_get_name($resource, true);
+        [$peer, $error] = $this->captureError(function () use ($resource) {
+            return stream_socket_get_name($resource, true);
+        });
+        if ($peer === false) {
+            $this->logTransportError('get_peer_name', $error);
+        }
+        return $peer;
     }
 
     /**
@@ -365,8 +437,14 @@ class TcpTransport implements TransportInterface
      */
     protected function probeWritable($resource): bool
     {
-        $result = @fwrite($resource, '');
-        return $result !== false;
+        [$result, $error] = $this->captureError(function () use ($resource) {
+            return fwrite($resource, '');
+        });
+        if ($result === false) {
+            $this->logTransportError('write_probe', $error);
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -377,5 +455,59 @@ class TcpTransport implements TransportInterface
     public function getResource()
     {
         return $this->resource;
+    }
+
+    /**
+     * @param callable(): mixed $operation
+     * @return array{0: mixed, 1: array{type: int, message: string, exception_class?: string}|null}
+     */
+    private function captureError(callable $operation): array
+    {
+        $error = null;
+        $handler = static function (int $errno, string $errstr) use (&$error): bool {
+            $error = [
+                'type' => $errno,
+                'message' => $errstr,
+            ];
+            return true;
+        };
+        set_error_handler($handler);
+        try {
+            $result = $operation();
+        } catch (\Throwable $e) {
+            $error ??= [
+                'type' => (int) $e->getCode(),
+                'message' => $e->getMessage(),
+                'exception_class' => $e::class,
+            ];
+            $result = false;
+        } finally {
+            restore_error_handler();
+        }
+
+        return [$result, $error];
+    }
+
+    /**
+     * @param array{type: int, message: string, exception_class?: string}|null $error
+     * @param array<string, mixed> $context
+     */
+    private function logTransportError(string $operation, ?array $error = null, array $context = []): void
+    {
+        $payload = array_merge([
+            'server_key' => $this->serverKey,
+            'operation' => $operation,
+            'host' => $this->host,
+            'port' => $this->port,
+            'error_message' => $error['message'] ?? null,
+            'error_type' => $error['type'] ?? null,
+            'exception_class' => $error['exception_class'] ?? null,
+        ], $context);
+
+        $this->logger->warning('Transport operation failed', $payload);
+        $this->metrics->increment('ami_transport_errors_total', array_merge(
+            $this->labels,
+            ['operation' => $operation]
+        ));
     }
 }

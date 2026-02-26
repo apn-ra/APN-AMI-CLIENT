@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Cluster;
 
 use Apn\AmiClient\Cluster\ClientOptions;
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
 use PHPUnit\Framework\TestCase;
 
 final class ClientOptionsTest extends TestCase
@@ -22,5 +23,15 @@ final class ClientOptionsTest extends TestCase
         $this->assertSame(['/^x-.+$/i'], $options->redactionKeyPatterns);
         $this->assertSame(96, $options->maxActionIdLength);
         $this->assertTrue($options->enforceIpEndpoints);
+    }
+
+    public function testInvalidRedactionPatternThrows(): void
+    {
+        $options = ClientOptions::fromArray([
+            'redaction_key_patterns' => ['/(unclosed/'],
+        ]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $options->createRedactor();
     }
 }

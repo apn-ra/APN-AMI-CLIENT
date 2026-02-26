@@ -204,7 +204,7 @@ Invariants that must remain true:
 None.
 
 ### Phase P1 (High)
-- [ ] PR5-P1-01 (BATCH-PR-20260226-05) Remove transport/reactor error suppression and emit structured errors
+- [x] PR5-P1-01 (BATCH-PR-20260226-05) Remove transport/reactor error suppression and emit structured errors
 Severity: P1
 Target files/classes: `src/Transport/TcpTransport.php`, `src/Transport/Reactor.php`
 Acceptance criteria:
@@ -217,7 +217,7 @@ Required tests to add:
 Invariants that must remain true:
 - Transport/selector errors are observable and never silently suppressed.
 
-- [ ] PR5-P1-02 (BATCH-PR-20260226-05) Make `Logger::log()` non-throwing and preserve listener isolation
+- [x] PR5-P1-02 (BATCH-PR-20260226-05) Make `Logger::log()` non-throwing and preserve listener isolation
 Severity: P1
 Target files/classes: `src/Core/Logger.php`, `src/Core/AmiClient.php`
 Acceptance criteria:
@@ -231,7 +231,7 @@ Invariants that must remain true:
 - Listener exceptions cannot break dispatch loops.
 
 ### Phase P2 (Medium)
-- [ ] PR5-P2-01 (BATCH-PR-20260226-05) Validate redaction regex patterns and fail fast
+- [x] PR5-P2-01 (BATCH-PR-20260226-05) Validate redaction regex patterns and fail fast
 Severity: P2
 Target files/classes: `src/Core/SecretRedactor.php`, `src/Core/ClientOptions.php`, `src/Exceptions/InvalidConfigurationException.php`
 Acceptance criteria:
@@ -243,7 +243,7 @@ Required tests to add:
 Invariants that must remain true:
 - Redaction must not be silently disabled by invalid patterns.
 
-- [ ] PR5-P2-02 (BATCH-PR-20260226-05) Move hostname resolution out of manager runtime path
+- [x] PR5-P2-02 (BATCH-PR-20260226-05) Move hostname resolution out of manager runtime path
 Severity: P2
 Target files/classes: `src/Cluster/AmiClientManager.php`, `config/*`
 Acceptance criteria:
@@ -256,7 +256,7 @@ Required tests to add:
 Invariants that must remain true:
 - No blocking DNS resolution in runtime-critical paths.
 
-- [ ] PR5-P2-03 (BATCH-PR-20260226-05) Replace signal handler `exit(0)` with application hook
+- [x] PR5-P2-03 (BATCH-PR-20260226-05) Replace signal handler `exit(0)` with application hook
 Severity: P2
 Target files/classes: `src/Cluster/AmiClientManager.php`
 Acceptance criteria:
@@ -267,6 +267,155 @@ Required tests to add:
 - PHPUnit unit test: signal handler triggers hook and does not terminate the process. Run with `vendor/bin/phpunit`.
 Invariants that must remain true:
 - Library code must not terminate the host process.
+
+### Phase P3 (Low)
+None.
+
+## Append: BATCH-PR-20260226-06
+
+### Phase P0 (Blockers)
+None.
+
+### Phase P1 (High)
+None.
+
+### Phase P2 (Medium)
+- [x] PR6-P2-01 (BATCH-PR-20260226-06) Add non-silent fallback reporting when callback exception handler is missing
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-06) -> P2 - PendingAction callback exception reporting can be silent
+Target files/classes: `src/Correlation/PendingAction.php`, `src/Core/Contracts/MetricsCollectorInterface.php`, `src/Core/Logger.php`
+Acceptance criteria:
+- When completion callback throws and callback exception handler is null, a deterministic fallback signal is emitted (structured log and/or metric increment).
+- Fallback signal includes `server_key` (when available), `action_id`, and callback exception class.
+- No exception from fallback reporting escapes into tick/correlation flow.
+Required tests to add:
+- PHPUnit unit test: callback throws + no handler -> fallback telemetry emitted and execution continues. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Callback exception handling is never silent.
+- Listener/callback exceptions cannot break dispatch loops.
+
+- [x] PR6-P2-02 (BATCH-PR-20260226-06) Isolate callback exception handler failures and preserve connection health
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-06) -> P2 - PendingAction callback exception reporting can be silent
+Target files/classes: `src/Correlation/PendingAction.php`, `tests/Unit/Core/*`, `tests/Integration/*`
+Acceptance criteria:
+- If callback exception handler throws, handler failure is captured by fallback telemetry path instead of being swallowed.
+- Connection/tick processing continues after callback + handler failure.
+- Subsequent actions/events complete successfully after the failure scenario.
+Required tests to add:
+- PHPUnit integration test: callback throws, handler throws, connection remains healthy and next action completes. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Callback exceptions and callback-handler failures are observable and isolated.
+
+- [x] PR6-P2-03 (BATCH-PR-20260226-06) Enforce parser constructor invariant between `bufferCap` and `maxFrameSize`
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-06) -> P2 - Parser buffer cap can be set below frame-size requirements
+Target files/classes: `src/Protocol/Parser.php`, `src/Exceptions/InvalidConfigurationException.php`
+Acceptance criteria:
+- Parser constructor validates that `bufferCap` is not smaller than `maxFrameSize` plus framing delimiter bytes.
+- Invalid parser size relationships fail fast with typed `InvalidConfigurationException`.
+- Validation message includes both configured values to support deterministic diagnosis.
+Required tests to add:
+- PHPUnit unit test: constructor with `bufferCap < maxFrameSize + delimiter` throws `InvalidConfigurationException`. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Parser configuration cannot accept relationships that desync valid frames before frame-size checks.
+
+- [x] PR6-P2-04 (BATCH-PR-20260226-06) Add parser misconfiguration regression tests to prevent desync churn
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-06) -> P2 - Parser buffer cap can be set below frame-size requirements
+Target files/classes: `tests/Unit/Protocol/ParserTest.php`, `tests/Unit/Protocol/ParserHardeningTest.php`, `src/Protocol/Parser.php`
+Acceptance criteria:
+- Tests prove invalid size relationship fails at construction and does not enter runtime parse path.
+- Tests verify valid large-frame configuration still parses bounded frames without forced desync.
+- Tests verify parser delimiter overhead is accounted for in accepted configuration.
+Required tests to add:
+- PHPUnit unit test: valid boundary case (`bufferCap == maxFrameSize + delimiter`) is accepted.
+- PHPUnit unit test: invalid relationship rejects configuration before parsing begins. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Parser settings remain bounded and deterministic under dialer-sized frames.
+
+### Phase P3 (Low)
+None.
+
+## Append: BATCH-PR-20260226-07
+
+### Phase P0 (Blockers)
+- [ ] PR7-P0-01 (BATCH-PR-20260226-07) Enforce session-boundary write-buffer purge on non-graceful close
+Severity: P0
+Target files/classes: `src/Transport/TcpTransport.php`, `src/Transport/WriteBuffer.php`, `src/Core/AmiClient.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P0 - Stale outbound bytes can leak across reconnect session boundaries
+Acceptance criteria:
+- Non-graceful close path clears or epoch-invalidates unsent write-buffer bytes before reconnect is attempted.
+- Reconnect path cannot flush bytes that were queued before the close event.
+- Graceful shutdown behavior remains explicit and deterministic.
+Required tests to add:
+- PHPUnit integration test: disconnect with pending writes, reconnect, and verify no stale action bytes are emitted to the new session. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: non-graceful close invokes write-buffer clear/epoch invalidation exactly once and buffer depth becomes zero for reconnect path. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Pending actions are deterministically failed on disconnect.
+- No cross-session action replay after reconnect.
+
+### Phase P1 (High)
+- [ ] PR7-P1-01 (BATCH-PR-20260226-07) Replace synchronous tick-path stdout logging with bounded non-blocking sink
+Severity: P1
+Target files/classes: `src/Core/Logger.php`, `src/Core/AmiClient.php`, `src/Core/Contracts/MetricsCollectorInterface.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Tick-path logging must not perform synchronous stdout I/O
+Acceptance criteria:
+- Tick-path logging no longer uses direct blocking stdout `echo` writes.
+- Logger sink has bounded queue/capacity with deterministic drop behavior.
+- Log-drop counter is incremented when sink capacity is exceeded.
+Required tests to add:
+- PHPUnit unit test: sink backpressure/drop path increments log-drop counter and does not throw. Run with `vendor/bin/phpunit`.
+- PHPUnit integration test: callback/listener exception logging under blocked sink does not block tick progression for subsequent processing. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop remains non-blocking under logging backpressure.
+- Listener exceptions cannot break dispatch loops.
+
+- [ ] PR7-P1-02 (BATCH-PR-20260226-07) Add event-drop log coalescing and interval rate limit
+Severity: P1
+Target files/classes: `src/Core/AmiClient.php`, `src/Core/EventQueue.php`, `src/Core/ClientOptions.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Per-drop warning logs create amplification storms under queue pressure
+Acceptance criteria:
+- Event-drop warnings are emitted as interval summaries with `dropped_delta`, `queue_depth`, and `server_key`.
+- Per-event drop warnings are removed from hot path.
+- Precise dropped-event counters remain monotonic and accurate.
+Required tests to add:
+- PHPUnit unit test: burst drop scenario emits at most one warning per configured interval while dropped counter equals total drops. Run with `vendor/bin/phpunit`.
+- PHPUnit integration test: sustained flood does not exceed configured logging rate budget and processing continues. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Queue drops remain observable.
+- Drop logging cannot dominate tick time under burst load.
+
+- [ ] PR7-P1-03 (BATCH-PR-20260226-07) Eliminate busy-spin in Laravel `ami:listen` runtime loop
+Severity: P1
+Target files/classes: `src/Laravel/Commands/ListenCommand.php`, `config/ami-client.php`, `tests/Integration/*`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Laravel listener loop busy-spins without blocking/yield
+Acceptance criteria:
+- Worker loop uses bounded blocking tick (`tickAll(10-50)` or configured equivalent) or deterministic idle sleep/yield path.
+- Loop cadence is configurable and validated at startup.
+- Idle loop no longer consumes near-100% CPU in normal no-event conditions.
+Required tests to add:
+- PHPUnit integration test: idle listen loop executes bounded iterations with configured wait and does not busy-spin. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: invalid loop cadence config is rejected with typed configuration exception. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Core remains framework-agnostic (no `Illuminate\*` outside `src/Laravel/`).
+- Runtime loop behavior is deterministic and bounded.
+
+### Phase P2 (Medium)
+- [ ] PR7-P2-01 (BATCH-PR-20260226-07) Enforce explicit non-blocking timeout semantics at runtime API boundary
+Severity: P2
+Target files/classes: `src/Cluster/AmiClientManager.php`, `src/Transport/Reactor.php`, `src/Transport/TcpTransport.php`, `src/Core/ClientOptions.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P2 - Non-blocking runtime contract is not enforced at API boundary
+Acceptance criteria:
+- Runtime-critical APIs reject or clamp blocking timeout inputs in production non-blocking mode.
+- If blocking mode is supported, it is exposed as explicit separate API path and cannot be used accidentally by runtime loop.
+- Timeout behavior is documented and configuration-validated.
+Required tests to add:
+- PHPUnit unit test: runtime non-blocking mode with `timeoutMs > 0` is clamped/rejected deterministically. Run with `vendor/bin/phpunit`.
+- PHPUnit integration test: `tickAll()` in production mode keeps non-blocking behavior across multiple nodes when caller passes non-zero timeout. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop fully non-blocking in production runtime mode.
+- Multi-server fairness under per-tick budgets remains intact.
 
 ### Phase P3 (Low)
 None.

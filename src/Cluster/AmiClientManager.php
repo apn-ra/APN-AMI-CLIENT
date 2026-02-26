@@ -15,7 +15,6 @@ use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Core\Logger;
 use Apn\AmiClient\Core\NullMetricsCollector;
-use Apn\AmiClient\Core\SecretRedactor;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
 use Apn\AmiClient\Exceptions\InvalidConfigurationException;
@@ -53,21 +52,43 @@ class AmiClientManager
     private array $resolvedHostsByKey = [];
     /** @var array<string, string> */
     private array $resolvedHostCache = [];
+    /** @var null|callable(string): string */
+    private $hostnameResolver;
+    /** @var null|callable(int): void */
+    private $signalHandler;
 
     public function __construct(
         private readonly ServerRegistry $registry = new ServerRegistry(),
         private readonly ClientOptions $options = new ClientOptions(),
         ?LoggerInterface $logger = null,
         ?Reactor $reactor = null,
-        ?MetricsCollectorInterface $metrics = null
+        ?MetricsCollectorInterface $metrics = null,
+        ?callable $hostnameResolver = null,
+        ?callable $signalHandler = null
     ) {
-        $this->reactor = $reactor ?? new Reactor();
         $this->metrics = $metrics ?? new NullMetricsCollector();
-        $this->logger = $logger ?? new Logger(new SecretRedactor(
-            $this->options->redactionKeys,
-            $this->options->redactionKeyPatterns,
-            $this->options->redactionValuePatterns
-        ));
+        $this->hostnameResolver = $hostnameResolver;
+        $this->signalHandler = $signalHandler;
+        $bootstrapLogger = $logger ?? new Logger();
+
+        try {
+            $redactor = $this->options->createRedactor();
+        } catch (InvalidConfigurationException $e) {
+            $bootstrapLogger->error('Invalid redaction pattern configuration', [
+                'pattern_type' => $e->getPatternType() ?? 'unknown',
+                'pattern' => $e->getPattern(),
+                'pattern_error' => $e->getPatternError(),
+            ]);
+
+            $this->metrics->increment('ami_redaction_pattern_invalid_total', [
+                'pattern_type' => $e->getPatternType() ?? 'unknown',
+            ]);
+
+            throw $e;
+        }
+
+        $this->logger = $logger ?? new Logger($redactor);
+        $this->reactor = $reactor ?? new Reactor($this->logger, $this->metrics);
 
         foreach ($this->registry->all() as $config) {
             $options = $config->options ?? $this->options;
@@ -378,7 +399,13 @@ class AmiClientManager
             $options->connectTimeout,
             $options->writeBufferLimit,
             $options->maxBytesReadPerTick,
-            $options->enforceIpEndpoints
+            $options->enforceIpEndpoints,
+            $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
+            $this->metrics,
+            [
+                'server_key' => $config->key,
+                'server_host' => $config->host,
+            ]
         );
 
         $labels = [
@@ -455,20 +482,33 @@ class AmiClientManager
             ));
         }
 
-        if (isset($this->resolvedHostCache[$config->host])) {
-            return $this->resolvedHostCache[$config->host];
+        return $this->resolveHostname($config->host, $config->key);
+    }
+
+    private function resolveHostname(string $host, string $serverKey): string
+    {
+        if (isset($this->resolvedHostCache[$host])) {
+            return $this->resolvedHostCache[$host];
         }
 
-        $resolved = gethostbyname($config->host);
-        if ($resolved === $config->host || filter_var($resolved, FILTER_VALIDATE_IP) === false) {
+        if ($this->hostnameResolver === null) {
             throw new InvalidConfigurationException(sprintf(
-                'Invalid server "%s": host "%s" could not be resolved to an IP during bootstrap.',
-                $config->key,
-                $config->host
+                'Invalid server "%s": host "%s" requires a pre-resolved IP or an injected hostname resolver.',
+                $serverKey,
+                $host
             ));
         }
 
-        $this->resolvedHostCache[$config->host] = $resolved;
+        $resolved = ($this->hostnameResolver)($host);
+        if (!is_string($resolved) || $resolved === '' || filter_var($resolved, FILTER_VALIDATE_IP) === false) {
+            throw new InvalidConfigurationException(sprintf(
+                'Invalid server "%s": hostname resolver returned invalid IP for host "%s".',
+                $serverKey,
+                $host
+            ));
+        }
+
+        $this->resolvedHostCache[$host] = $resolved;
         return $resolved;
     }
 
@@ -500,7 +540,9 @@ class AmiClientManager
             pcntl_async_signals(true);
             $handler = function (int $signal) {
                 $this->terminate();
-                exit(0);
+                if ($this->signalHandler !== null) {
+                    ($this->signalHandler)($signal);
+                }
             };
             pcntl_signal(SIGTERM, $handler);
             pcntl_signal(SIGINT, $handler);

@@ -131,14 +131,56 @@ final class PendingAction
         try {
             $callback($this->exception, $this->response, $this->events);
         } catch (Throwable $e) {
+            $reportedByHandler = false;
+
             if ($this->callbackExceptionHandler !== null) {
                 try {
                     ($this->callbackExceptionHandler)($this->callbackIdentity($callback), $e, $this->action);
+                    $reportedByHandler = true;
                 } catch (Throwable) {
                     // Never allow reporting failures to escape into tick/correlation flow.
                 }
             }
+
+            if (!$reportedByHandler) {
+                $this->emitFallbackCallbackExceptionTelemetry($callback, $e);
+            }
         }
+    }
+
+    private function emitFallbackCallbackExceptionTelemetry(callable $callback, Throwable $exception): void
+    {
+        $payload = [
+            'type' => 'pending_action_callback_exception',
+            'server_key' => $this->deriveServerKey(),
+            'action_id' => $this->action->getActionId(),
+            'action_name' => $this->action->getActionName(),
+            'callback' => $this->callbackIdentity($callback),
+            'callback_exception_class' => $exception::class,
+            'callback_exception_message' => $exception->getMessage(),
+        ];
+
+        try {
+            $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
+            error_log($encoded === false ? '{"type":"pending_action_callback_exception"}' : $encoded);
+        } catch (Throwable) {
+            error_log('{"type":"pending_action_callback_exception"}');
+        }
+    }
+
+    private function deriveServerKey(): string
+    {
+        $actionId = $this->action->getActionId();
+        if (!is_string($actionId) || $actionId === '') {
+            return 'unknown';
+        }
+
+        $separatorPos = strpos($actionId, ':');
+        if ($separatorPos === false || $separatorPos === 0) {
+            return 'unknown';
+        }
+
+        return substr($actionId, 0, $separatorPos);
     }
 
     private function callbackIdentity(callable $callback): string

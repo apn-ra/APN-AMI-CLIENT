@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Core;
 
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
+
 /**
  * Redacts sensitive information from data structures.
  */
@@ -67,6 +69,9 @@ class SecretRedactor
             self::DEFAULT_SENSITIVE_VALUE_PATTERNS,
             $additionalSensitiveValuePatterns
         ))));
+
+        $this->assertValidPatterns($this->sensitiveKeyPatterns, 'key');
+        $this->assertValidPatterns($this->sensitiveValuePatterns, 'value');
     }
 
     /**
@@ -103,7 +108,8 @@ class SecretRedactor
         }
 
         foreach ($this->sensitiveKeyPatterns as $pattern) {
-            if (@preg_match($pattern, $normalized) === 1) {
+            $result = preg_match($pattern, $normalized);
+            if ($result === 1) {
                 return true;
             }
         }
@@ -115,12 +121,46 @@ class SecretRedactor
     {
         $redacted = $value;
         foreach ($this->sensitiveValuePatterns as $pattern) {
-            $result = @preg_replace($pattern, '********', $redacted);
-            if (is_string($result)) {
+            $result = preg_replace($pattern, '********', $redacted);
+            if ($result !== null) {
                 $redacted = $result;
             }
         }
 
         return $redacted;
+    }
+
+    /**
+     * @param string[] $patterns
+     */
+    private function assertValidPatterns(array $patterns, string $type): void
+    {
+        foreach ($patterns as $pattern) {
+            $error = $this->validatePattern($pattern);
+            if ($error !== null) {
+                throw InvalidConfigurationException::forRedactionPattern($type, $pattern, $error);
+            }
+        }
+    }
+
+    private function validatePattern(string $pattern): ?string
+    {
+        $error = null;
+        set_error_handler(static function (int $severity, string $message) use (&$error): bool {
+            $error = $message;
+            return true;
+        });
+
+        try {
+            $result = preg_match($pattern, '');
+        } finally {
+            restore_error_handler();
+        }
+
+        if ($result === false) {
+            return $error ?? 'Invalid regex pattern';
+        }
+
+        return null;
     }
 }
