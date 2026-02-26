@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Protocol;
 
-use Apn\AmiClient\Protocol\Strategies\MultiResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 
 /**
  * AMI PJSIPShowEndpoint action.
@@ -24,7 +24,7 @@ final readonly class PJSIPShowEndpoint extends Action
         parent::__construct(
             ['Endpoint' => $endpoint],
             $actionId,
-            new MultiResponseStrategy('EndpointDetailComplete')
+            new MultiEventStrategy('EndpointDetailComplete')
         );
     }
 

@@ -56,8 +56,11 @@ interface AmiClientInterface
     /**
      * Performs internal processing (timeouts, health) without I/O multiplexing.
      * This is used when an external reactor handles the stream_select call.
+     *
+     * @param bool $canAttemptConnect Whether this tick allows new connection attempts (Phase 4).
+     * @return bool Whether a connection attempt was made.
      */
-    public function processTick(): void;
+    public function processTick(bool $canAttemptConnect = true): bool;
 
     /**
      * Check if the client is connected.

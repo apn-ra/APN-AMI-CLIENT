@@ -6,6 +6,7 @@ namespace Tests\Unit\Protocol;
 
 use Apn\AmiClient\Exceptions\ParserDesyncException;
 use Apn\AmiClient\Exceptions\ProtocolException;
+use Apn\AmiClient\Protocol\Banner;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Protocol\Response;
@@ -20,6 +21,28 @@ class ParserTest extends TestCase
     protected function setUp(): void
     {
         $this->parser = new Parser();
+    }
+
+    public function test_it_parses_initial_banner(): void
+    {
+        $this->parser->push("Asterisk Call Manager/5.0.1\r\n");
+        $banner = $this->parser->next();
+        
+        $this->assertInstanceOf(Banner::class, $banner);
+        $this->assertEquals("Asterisk Call Manager/5.0.1", $banner->getVersionString());
+    }
+
+    public function test_it_does_not_parse_banner_twice(): void
+    {
+        $this->parser->push("Asterisk Call Manager/5.0.1\r\n");
+        $this->parser->next();
+        
+        // Second banner should NOT be parsed as Banner but probably as a malformed Response
+        $this->parser->push("Asterisk Call Manager/2.0.0\r\n\r\n");
+        $msg = $this->parser->next();
+        
+        $this->assertNotInstanceOf(Banner::class, $msg);
+        $this->assertInstanceOf(Response::class, $msg);
     }
 
     public function test_it_parses_simple_response(): void
@@ -135,7 +158,10 @@ class ParserTest extends TestCase
         try {
             $this->parser->push($garbage);
         } catch (ParserDesyncException $e) {
-            $this->assertStringContainsString("safety limit", $e->getMessage());
+            $this->assertTrue(
+                str_contains($e->getMessage(), "safety limit") || 
+                str_contains($e->getMessage(), "No message delimiter found")
+            );
         }
         
         // Parser should be cleared, but let's test push after recovery

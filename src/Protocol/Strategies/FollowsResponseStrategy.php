@@ -19,9 +19,13 @@ final class FollowsResponseStrategy implements CompletionStrategyInterface
 
     /**
      * @param int $maxOutputSize Hard limit for the follows output (default 1MB).
+     * @param int $maxDurationMs Maximum duration for this action.
+     * @param int $maxMessages Maximum messages to collect.
      */
     public function __construct(
-        private readonly int $maxOutputSize = 1048576
+        private readonly int $maxOutputSize = 1048576,
+        private readonly int $maxDurationMs = 60000,
+        private readonly int $maxMessages = 100,
     ) {
     }
 
@@ -65,5 +69,20 @@ final class FollowsResponseStrategy implements CompletionStrategyInterface
     public function isComplete(): bool
     {
         return $this->complete;
+    }
+
+    public function getMaxDurationMs(): int
+    {
+        return $this->maxDurationMs;
+    }
+
+    public function getMaxMessages(): int
+    {
+        return $this->maxMessages;
+    }
+
+    public function getTerminalEventNames(): array
+    {
+        return [];
     }
 }

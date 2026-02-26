@@ -12,15 +12,19 @@ use Apn\AmiClient\Protocol\Event;
  * Strategy for actions that return a success response followed by a sequence of events,
  * finishing with a specific "Complete" event.
  */
-final class MultiResponseStrategy implements CompletionStrategyInterface
+final class MultiEventStrategy implements CompletionStrategyInterface
 {
     private bool $complete = false;
 
     /**
      * @param string $completeEventName The name of the event that signals completion.
+     * @param int $maxDurationMs Maximum duration for this action.
+     * @param int $maxMessages Maximum messages to collect.
      */
     public function __construct(
-        private readonly string $completeEventName
+        private readonly string $completeEventName,
+        private readonly int $maxDurationMs = 60000,
+        private readonly int $maxMessages = 10000,
     ) {
     }
 
@@ -49,5 +53,20 @@ final class MultiResponseStrategy implements CompletionStrategyInterface
     public function isComplete(): bool
     {
         return $this->complete;
+    }
+
+    public function getMaxDurationMs(): int
+    {
+        return $this->maxDurationMs;
+    }
+
+    public function getMaxMessages(): int
+    {
+        return $this->maxMessages;
+    }
+
+    public function getTerminalEventNames(): array
+    {
+        return [$this->completeEventName];
     }
 }

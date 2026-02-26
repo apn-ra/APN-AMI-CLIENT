@@ -39,9 +39,17 @@ return [
     |
     */
     'options' => [
+        // Max wall-clock duration allowed in CONNECTING (non-blocking).
         'connect_timeout' => 10,
+        // Idle-read liveness threshold in seconds (non-blocking).
         'read_timeout' => 30,
         'heartbeat_interval' => 15,
+        // Circuit breaker: consecutive failure threshold before OPEN.
+        'circuit_failure_threshold' => 5,
+        // Circuit breaker: cooldown seconds before allowing probes.
+        'circuit_cooldown' => 30,
+        // Circuit breaker: max probe attempts while HALF_OPEN.
+        'circuit_half_open_max_probes' => 1,
         'max_pending_actions' => 5000,
     ],
 

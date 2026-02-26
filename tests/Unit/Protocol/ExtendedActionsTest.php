@@ -8,7 +8,7 @@ use Apn\AmiClient\Protocol\QueueStatus;
 use Apn\AmiClient\Protocol\QueueSummary;
 use Apn\AmiClient\Protocol\PJSIPShowEndpoints;
 use Apn\AmiClient\Protocol\PJSIPShowEndpoint;
-use Apn\AmiClient\Protocol\Strategies\MultiResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 use PHPUnit\Framework\TestCase;
 
 class ExtendedActionsTest extends TestCase
@@ -25,7 +25,7 @@ class ExtendedActionsTest extends TestCase
         $this->assertEquals('PJSIP/101', $params['Member']);
 
         $strategy = $action->getCompletionStrategy();
-        $this->assertInstanceOf(MultiResponseStrategy::class, $strategy);
+        $this->assertInstanceOf(MultiEventStrategy::class, $strategy);
         
         // Check if strategy name is correct (using reflection as property is private)
         $reflection = new \ReflectionClass($strategy);
@@ -49,7 +49,7 @@ class ExtendedActionsTest extends TestCase
         $this->assertEquals('support', $params['Queue']);
 
         $strategy = $action->getCompletionStrategy();
-        $this->assertInstanceOf(MultiResponseStrategy::class, $strategy);
+        $this->assertInstanceOf(MultiEventStrategy::class, $strategy);
         
         $reflection = new \ReflectionClass($strategy);
         $property = $reflection->getProperty('completeEventName');
@@ -70,7 +70,7 @@ class ExtendedActionsTest extends TestCase
         $this->assertEmpty($action->getParameters());
 
         $strategy = $action->getCompletionStrategy();
-        $this->assertInstanceOf(MultiResponseStrategy::class, $strategy);
+        $this->assertInstanceOf(MultiEventStrategy::class, $strategy);
         
         $reflection = new \ReflectionClass($strategy);
         $property = $reflection->getProperty('completeEventName');
@@ -92,7 +92,7 @@ class ExtendedActionsTest extends TestCase
         $this->assertEquals('100', $params['Endpoint']);
 
         $strategy = $action->getCompletionStrategy();
-        $this->assertInstanceOf(MultiResponseStrategy::class, $strategy);
+        $this->assertInstanceOf(MultiEventStrategy::class, $strategy);
         
         $reflection = new \ReflectionClass($strategy);
         $property = $reflection->getProperty('completeEventName');

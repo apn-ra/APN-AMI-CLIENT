@@ -49,6 +49,11 @@ interface TransportInterface
     public function isConnected(): bool;
 
     /**
+     * Returns the number of pending bytes queued for write.
+     */
+    public function getPendingWriteBytes(): int;
+
+    /**
      * Clean up resources and close connections.
      */
     public function terminate(): void;

@@ -54,10 +54,12 @@ class Reactor
             }
 
             $id = (int) $resource;
-            $read[] = $resource;
+            if ($transport->isConnected()) {
+                $read[] = $resource;
+            }
             $idToKey[$id] = $key;
 
-            if ($transport->hasPendingWrites()) {
+            if ($transport->isConnecting() || ($transport->isConnected() && $transport->hasPendingWrites())) {
                 $write[] = $resource;
             }
         }
@@ -88,10 +90,7 @@ class Reactor
             $id = (int) $resource;
             if (isset($idToKey[$id])) {
                 $transport = $this->transports[$idToKey[$id]];
-                // Ensure it's still connected and still has pending writes.
-                if ($transport->isConnected() && $transport->hasPendingWrites()) {
-                    $transport->flush();
-                }
+                $transport->handleWriteReady();
             }
         }
     }

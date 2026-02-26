@@ -16,6 +16,8 @@ class TcpTransport implements TransportInterface
 {
     /** @var resource|null */
     private $resource = null;
+    private bool $connecting = false;
+    private bool $connected = false;
 
     private readonly WriteBuffer $writeBuffer;
 
@@ -27,6 +29,7 @@ class TcpTransport implements TransportInterface
         private readonly int $port,
         private readonly int $connectTimeout = 30,
         int $writeBufferLimit = 5242880,
+        private readonly int $maxBytesReadPerTick = 1048576,
     ) {
         $this->writeBuffer = new WriteBuffer($writeBufferLimit);
     }
@@ -40,14 +43,13 @@ class TcpTransport implements TransportInterface
         $errno = 0;
         $errstr = '';
 
-        // We use STREAM_CLIENT_CONNECT with a timeout.
-        // stream_socket_client blocks during the connection phase up to the timeout.
+        // Use async connect to avoid blocking the tick loop.
         $resource = @stream_socket_client(
             $remote,
             $errno,
             $errstr,
-            (float) $this->connectTimeout,
-            STREAM_CLIENT_CONNECT
+            0.0,
+            STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT
         );
 
         if ($resource === false || !is_resource($resource)) {
@@ -62,6 +64,8 @@ class TcpTransport implements TransportInterface
         // Guideline 2: All socket operations must use non-blocking mode.
         stream_set_blocking($resource, false);
         $this->resource = $resource;
+        $this->connecting = true;
+        $this->connected = false;
     }
 
     /**
@@ -73,6 +77,8 @@ class TcpTransport implements TransportInterface
             @fclose($this->resource);
         }
         $this->resource = null;
+        $this->connecting = false;
+        $this->connected = false;
     }
 
     /**
@@ -102,7 +108,20 @@ class TcpTransport implements TransportInterface
      */
     public function isConnected(): bool
     {
-        return $this->resource !== null && is_resource($this->resource) && !feof($this->resource);
+        return $this->connected && $this->resource !== null && is_resource($this->resource) && !feof($this->resource);
+    }
+
+    public function getPendingWriteBytes(): int
+    {
+        return $this->writeBuffer->size();
+    }
+
+    /**
+     * Returns true while an async connect is in progress.
+     */
+    public function isConnecting(): bool
+    {
+        return $this->connecting;
     }
 
     /**
@@ -122,8 +141,11 @@ class TcpTransport implements TransportInterface
             return;
         }
 
-        $read = [$this->resource];
-        $write = $this->writeBuffer->isEmpty() ? [] : [$this->resource];
+        $read = $this->connected ? [$this->resource] : [];
+        $write = [];
+        if ($this->connecting || (!$this->writeBuffer->isEmpty() && $this->connected)) {
+            $write = [$this->resource];
+        }
         $except = null;
 
         $seconds = (int) ($timeoutMs / 1000);
@@ -136,13 +158,13 @@ class TcpTransport implements TransportInterface
             return;
         }
 
-        if (in_array($this->resource, $read, true)) {
+        if ($this->connected && in_array($this->resource, $read, true)) {
             $this->read();
         }
 
         // Re-check resource as read() might have closed it
         if ($this->resource !== null && in_array($this->resource, $write, true)) {
-            $this->flush();
+            $this->handleWriteReady();
         }
     }
 
@@ -156,24 +178,37 @@ class TcpTransport implements TransportInterface
             return;
         }
 
-        // Use a 8KB chunk size for reads.
-        $data = fread($this->resource, 8192);
+        $bytesRead = 0;
+        $maxToRead = $this->maxBytesReadPerTick;
 
-        if ($data === false) {
-            $this->close();
-            return;
-        }
+        while ($bytesRead < $maxToRead) {
+            $chunkSize = min(8192, $maxToRead - $bytesRead);
+            $data = @fread($this->resource, $chunkSize);
 
-        if ($data === '') {
-            // If stream_select said it's ready but we read nothing, it might be EOF.
-            if (feof($this->resource)) {
+            if ($data === false) {
                 $this->close();
+                return;
             }
-            return;
-        }
 
-        if ($this->onDataCallback !== null) {
-            ($this->onDataCallback)($data);
+            if ($data === '') {
+                // If stream_select said it's ready but we read nothing, it might be EOF.
+                if (feof($this->resource)) {
+                    $this->close();
+                }
+                break;
+            }
+
+            $len = strlen($data);
+            $bytesRead += $len;
+
+            if ($this->onDataCallback !== null) {
+                ($this->onDataCallback)($data);
+            }
+
+            if ($len < $chunkSize) {
+                // No more data available on the socket for now
+                break;
+            }
         }
     }
 
@@ -206,6 +241,48 @@ class TcpTransport implements TransportInterface
     {
         $this->close();
         $this->writeBuffer->clear();
+    }
+
+    /**
+     * Handle write-ready notification for either async connect completion or flushing writes.
+     */
+    public function handleWriteReady(): void
+    {
+        if ($this->connecting) {
+            $this->finalizeAsyncConnect();
+        }
+
+        if ($this->connected && $this->hasPendingWrites()) {
+            $this->flush();
+        }
+    }
+
+    private function finalizeAsyncConnect(): void
+    {
+        if ($this->resource === null || !is_resource($this->resource)) {
+            return;
+        }
+
+        if (!function_exists('socket_import_stream') || !function_exists('socket_get_option')) {
+            $this->connecting = false;
+            $this->connected = true;
+            return;
+        }
+
+        $socket = @socket_import_stream($this->resource);
+        if ($socket === false) {
+            $this->close();
+            return;
+        }
+
+        $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
+        if ($error === 0) {
+            $this->connecting = false;
+            $this->connected = true;
+            return;
+        }
+
+        $this->close();
     }
 
     /**

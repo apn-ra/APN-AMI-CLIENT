@@ -28,4 +28,22 @@ interface CompletionStrategyInterface
      * Whether this action is complete.
      */
     public function isComplete(): bool;
+
+    /**
+     * Get the maximum duration in milliseconds for this action.
+     */
+    public function getMaxDurationMs(): int;
+
+    /**
+     * Get the maximum number of messages (responses/events) to accept for this action.
+     * Use 0 for no limit.
+     */
+    public function getMaxMessages(): int;
+
+    /**
+     * Get names of events that signify completion of this action.
+     *
+     * @return string[]
+     */
+    public function getTerminalEventNames(): array;
 }

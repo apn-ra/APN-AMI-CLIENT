@@ -12,6 +12,7 @@ use Apn\AmiClient\Core\Contracts\AmiClientInterface;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Transport\Reactor;
+use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 
 class AmiClientManagerTest extends TestCase
@@ -56,6 +57,32 @@ class AmiClientManagerTest extends TestCase
         $client2->expects($this->once())->method('processTick');
         
         $manager->tickAll(100);
+    }
+
+    public function testClusterWideConnectThrottling(): void
+    {
+        $options = new ClientOptions(maxConnectAttemptsPerTick: 1);
+        $manager = new AmiClientManager(options: $options);
+        
+        $client1 = $this->createMock(AmiClientInterface::class);
+        $client2 = $this->createMock(AmiClientInterface::class);
+        
+        $manager->addClient('node1', $client1);
+        $manager->addClient('node2', $client2);
+        
+        // client1 attempts to connect and succeeds (in terms of budget)
+        $client1->expects($this->once())
+            ->method('processTick')
+            ->with(true) // canConnect = true
+            ->willReturn(true); // attempted = true
+            
+        // client2 should NOT be allowed to connect because budget (1) is exhausted
+        $client2->expects($this->once())
+            ->method('processTick')
+            ->with(false) // canConnect = false
+            ->willReturn(false); // attempted = false
+            
+        $manager->tickAll();
     }
 
     public function testNodeIsolationOnTick(): void
@@ -106,6 +133,43 @@ class AmiClientManagerTest extends TestCase
         
         $this->assertSame($amiEvent, $receivedAny);
         $this->assertSame($amiEvent, $receivedSpecific);
+    }
+
+    public function testListenerExceptionsDoNotBlockOtherListeners(): void
+    {
+        $manager = new AmiClientManager(logger: new NullLogger());
+        $client = $this->createMock(AmiClientInterface::class);
+
+        $clientListener = null;
+        $client->method('onAnyEvent')->willReturnCallback(function ($callback) use (&$clientListener) {
+            $clientListener = $callback;
+        });
+
+        $manager->addClient('node1', $client);
+
+        $specificCalls = 0;
+        $anyCalls = 0;
+
+        $manager->onEvent('TestEvent', function () {
+            throw new \RuntimeException('boom');
+        });
+        $manager->onEvent('TestEvent', function () use (&$specificCalls) {
+            $specificCalls++;
+        });
+        $manager->onAnyEvent(function () {
+            throw new \RuntimeException('boom any');
+        });
+        $manager->onAnyEvent(function () use (&$anyCalls) {
+            $anyCalls++;
+        });
+
+        $event = new Event(['event' => 'TestEvent']);
+        $amiEvent = new AmiEvent($event, 'node1', microtime(true));
+
+        $clientListener($amiEvent);
+
+        $this->assertEquals(1, $specificCalls);
+        $this->assertEquals(1, $anyCalls);
     }
 
     public function testSelectThrowsIfNoClients(): void

@@ -6,7 +6,7 @@ namespace tests\Unit\Correlation;
 
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
-use Apn\AmiClient\Protocol\Strategies\MultiResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
@@ -44,7 +44,7 @@ class CorrelationRegistryTest extends TestCase
     public function test_it_handles_multi_response_actions(): void
     {
         $registry = new CorrelationRegistry();
-        $strategy = new MultiResponseStrategy('TestComplete');
+        $strategy = new MultiEventStrategy('TestComplete');
         $action = $this->createMockAction('server:1:1', $strategy);
         
         $pending = $registry->register($action);
@@ -203,7 +203,7 @@ class CorrelationRegistryTest extends TestCase
     public function test_it_enforces_event_collection_limit(): void
     {
         $registry = new CorrelationRegistry();
-        $strategy = new MultiResponseStrategy('Complete');
+        $strategy = new MultiEventStrategy('Complete');
         $action = $this->createMockAction('id', $strategy);
         $pending = $registry->register($action);
         

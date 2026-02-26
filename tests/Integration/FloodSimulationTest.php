@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Integration;
 
 use Apn\AmiClient\Core\AmiClient;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
@@ -25,8 +26,14 @@ class FloodSimulationTest extends TestCase
             $onDataCallback = $callback;
         });
         
-        // Use default 10,000 capacity for events
-        $client = new AmiClient('node1', $transport, new CorrelationRegistry(), new ActionIdGenerator('node1'));
+        // Use default 10,000 capacity for events, but large tick budget for testing
+        $client = new AmiClient(
+            'node1', 
+            $transport, 
+            new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry()),
+            maxFramesPerTick: 20000,
+            maxEventsPerTick: 20000
+        );
         
         $receivedCount = 0;
         $client->onAnyEvent(function(AmiEvent $event) use (&$receivedCount) {
@@ -38,18 +45,18 @@ class FloodSimulationTest extends TestCase
             $onDataCallback("Event: FloodEvent\r\n\r\n");
         }
         
-        // Verify drop policy: queue should have 10,000 events, 2,000 dropped
-        $health = $client->health();
-        $this->assertEquals(10000, $health['pending_actions'] === 0 ? 10000 : 0); // Event queue size is internal, but we can check drops
-        $this->assertEquals(2000, $health['dropped_events']);
-        
         // Dispatch events
         $client->processTick();
+        
+        // Verify drop policy
+        $health = $client->health();
+        $this->assertEquals(2000, $health['dropped_events']);
         $this->assertEquals(10000, $receivedCount);
         
         // Test backpressure on actions
         $registry = new CorrelationRegistry(10);
-        $clientWithBackpressure = new AmiClient('node1', $transport, $registry, new ActionIdGenerator('node1'));
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), $registry);
+        $clientWithBackpressure = new AmiClient('node1', $transport, $correlation);
         
         for ($i = 0; $i < 10; $i++) {
             $clientWithBackpressure->send(new GenericAction('Ping'));

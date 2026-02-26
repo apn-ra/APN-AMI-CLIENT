@@ -9,6 +9,7 @@ use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Transport\TcpTransport;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Protocol\GenericAction;
 use PHPUnit\Framework\TestCase;
 
@@ -49,10 +50,23 @@ class ClusterIntegrationTest extends TestCase
         
         $c1->open();
         $c2->open();
-        
+
         // Accept connections on mock servers
-        $conn1 = $this->accept($this->server1);
-        $conn2 = $this->accept($this->server2);
+        $conn1 = null;
+        $conn2 = null;
+        for ($i = 0; $i < 20; $i++) {
+            $manager->tickAll(10);
+            if ($conn1 === null) {
+                $conn1 = $this->accept($this->server1);
+            }
+            if ($conn2 === null) {
+                $conn2 = $this->accept($this->server2);
+            }
+            if ($conn1 !== null && $conn2 !== null && $c1->isConnected() && $c2->isConnected()) {
+                break;
+            }
+            usleep(10000);
+        }
         
         $this->assertNotNull($conn1, "Failed to connect to server 1");
         $this->assertNotNull($conn2, "Failed to connect to server 2");
@@ -93,9 +107,8 @@ class ClusterIntegrationTest extends TestCase
     private function createClient(string $key, string $host, int $port): AmiClient
     {
         $transport = new TcpTransport($host, $port);
-        $correlation = new CorrelationRegistry();
-        $generator = new ActionIdGenerator($key);
-        return new AmiClient($key, $transport, $correlation, $generator);
+        $correlation = new CorrelationManager(new ActionIdGenerator($key), new CorrelationRegistry());
+        return new AmiClient($key, $transport, $correlation);
     }
 
     private function accept($server)

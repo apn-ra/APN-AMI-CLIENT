@@ -15,6 +15,12 @@ final class SingleResponseStrategy implements CompletionStrategyInterface
 {
     private bool $complete = false;
 
+    public function __construct(
+        private readonly int $maxDurationMs = 30000,
+        private readonly int $maxMessages = 1,
+    ) {
+    }
+
     public function onResponse(Response $response): bool
     {
         $this->complete = true;
@@ -30,5 +36,20 @@ final class SingleResponseStrategy implements CompletionStrategyInterface
     public function isComplete(): bool
     {
         return $this->complete;
+    }
+
+    public function getMaxDurationMs(): int
+    {
+        return $this->maxDurationMs;
+    }
+
+    public function getMaxMessages(): int
+    {
+        return $this->maxMessages;
+    }
+
+    public function getTerminalEventNames(): array
+    {
+        return [];
     }
 }

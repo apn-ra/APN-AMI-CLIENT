@@ -16,9 +16,25 @@ use Apn\AmiClient\Exceptions\ProtocolException;
 class Parser
 {
     private string $buffer = '';
+    private int $bufferCap = 2097152; // 2MB (Guideline 6, Phase 1)
+    private bool $bannerProcessed = false;
 
     /** @var int 64KB hard limit for individual AMI frames (Guideline 6, Phase 1) */
     private const int MAX_FRAME_SIZE = 65536;
+
+    public function __construct(int $bufferCap = 2097152)
+    {
+        $this->bufferCap = $bufferCap;
+    }
+
+    /**
+     * Reset the parser state.
+     */
+    public function reset(): void
+    {
+        $this->buffer = '';
+        $this->bannerProcessed = false;
+    }
 
     /**
      * Push raw bytes into the parser buffer.
@@ -28,9 +44,21 @@ class Parser
         $this->buffer .= $data;
 
         // Bounded memory check (Guideline 6: No unbounded memory growth)
-        if (strlen($this->buffer) > self::MAX_FRAME_SIZE * 2 && !str_contains($this->buffer, "\r\n\r\n")) {
+        if (strlen($this->buffer) > $this->bufferCap) {
              $this->recover();
-             throw new ParserDesyncException("Parser buffer exceeded safety limit without finding message delimiter");
+             if (strlen($this->buffer) > $this->bufferCap) {
+                 $this->buffer = '';
+             }
+             throw new ParserDesyncException("Parser buffer exceeded safety limit (" . $this->bufferCap . " bytes)");
+        }
+
+        // Defensive check: if we have more than MAX_FRAME_SIZE and no delimiter, something is wrong.
+        if (strlen($this->buffer) > self::MAX_FRAME_SIZE * 2) {
+            if (!str_contains($this->buffer, "\r\n\r\n") && !str_contains($this->buffer, "\n\n")) {
+                $len = strlen($this->buffer);
+                $this->buffer = '';
+                throw new ParserDesyncException("No message delimiter found in $len bytes of data (exceeded safety limit)");
+            }
         }
     }
 
@@ -42,13 +70,41 @@ class Parser
      */
     public function next(): ?Message
     {
-        $pos = strpos($this->buffer, "\r\n\r\n");
-        if ($pos === false) {
+        // Handle initial banner (Task 4.3)
+        if (!$this->bannerProcessed && strlen($this->buffer) > 0) {
+            $posrn = strpos($this->buffer, "\r\n");
+            $posn = strpos($this->buffer, "\n");
+            
+            if ($posrn !== false || $posn !== false) {
+                $pos = ($posrn !== false && ($posn === false || $posrn < $posn)) ? $posrn : $posn;
+                $line = substr($this->buffer, 0, $pos);
+                
+                if (str_starts_with($line, 'Asterisk Call Manager/')) {
+                    $this->bannerProcessed = true;
+                    $delimiterLen = ($posrn !== false && ($posn === false || $posrn < $posn)) ? 2 : 1;
+                    $this->buffer = substr($this->buffer, $pos + $delimiterLen);
+                    return new Banner($line);
+                }
+            }
+        }
+
+        $posrn = strpos($this->buffer, "\r\n\r\n");
+        $posn = strpos($this->buffer, "\n\n");
+
+        if ($posrn === false && $posn === false) {
             return null;
         }
 
+        if ($posrn !== false && ($posn === false || $posrn < $posn)) {
+            $pos = $posrn;
+            $delimiterLen = 4;
+        } else {
+            $pos = $posn;
+            $delimiterLen = 2;
+        }
+
         $frame = substr($this->buffer, 0, $pos);
-        $this->buffer = substr($this->buffer, $pos + 4);
+        $this->buffer = substr($this->buffer, $pos + $delimiterLen);
 
         if (strlen($frame) > self::MAX_FRAME_SIZE) {
             $this->recover();
@@ -63,7 +119,7 @@ class Parser
      */
     private function parseFrame(string $frame): Message
     {
-        $lines = explode("\r\n", $frame);
+        $lines = preg_split('/\r?\n/', $frame);
         $headers = [];
         $currentKey = null;
 
@@ -116,9 +172,13 @@ class Parser
      */
     private function recover(): void
     {
-        $pos = strpos($this->buffer, "\r\n\r\n");
-        if ($pos !== false) {
-            $this->buffer = substr($this->buffer, $pos + 4);
+        $posrn = strpos($this->buffer, "\r\n\r\n");
+        $posn = strpos($this->buffer, "\n\n");
+
+        if ($posrn !== false && ($posn === false || $posrn < $posn)) {
+            $this->buffer = substr($this->buffer, $posrn + 4);
+        } elseif ($posn !== false) {
+            $this->buffer = substr($this->buffer, $posn + 2);
         } else {
             $this->buffer = '';
         }

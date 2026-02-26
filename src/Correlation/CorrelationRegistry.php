@@ -40,7 +40,7 @@ final class CorrelationRegistry
      *
      * @throws BackpressureException if the pending action limit is reached.
      */
-    public function register(Action $action, float $timeoutSeconds = 30.0): PendingAction
+    public function register(Action $action, ?float $timeoutSeconds = null): PendingAction
     {
         if (count($this->pending) >= $this->maxPending) {
             throw new BackpressureException(
@@ -52,6 +52,9 @@ final class CorrelationRegistry
         if ($actionId === null) {
             throw new \InvalidArgumentException("Action must have an ActionID for correlation");
         }
+
+        $strategy = $action->getCompletionStrategy();
+        $timeoutSeconds ??= $strategy->getMaxDurationMs() / 1000.0;
 
         $pendingAction = new PendingAction($action, microtime(true) + $timeoutSeconds);
         $this->pending[$actionId] = $pendingAction;
@@ -94,8 +97,12 @@ final class CorrelationRegistry
         $pending = $this->pending[$actionId];
         $strategy = $pending->getAction()->getCompletionStrategy();
 
-        // Safety limit to prevent OOM on malformed multi-response actions
-        if (count($this->collectedEvents[$actionId]) < 10000) {
+        $maxMessages = $strategy->getMaxMessages();
+        if ($maxMessages === 0) {
+            $maxMessages = 10000; // Default safety cap
+        }
+
+        if (count($this->collectedEvents[$actionId]) < $maxMessages) {
             $this->collectedEvents[$actionId][] = $event;
         }
 

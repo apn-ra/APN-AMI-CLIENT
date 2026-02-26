@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Core;
 
 use Apn\AmiClient\Core\AmiClient;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\EventFilter;
 use Apn\AmiClient\Core\EventQueue;
@@ -66,13 +67,18 @@ class FloodControlTest extends TestCase
         $transport->method('onData')->willReturnCallback(function($callback) use (&$onDataCallback) {
             $onDataCallback = $callback;
         });
+        $transport->method('isConnected')->willReturn(true);
         
         $client = new AmiClient(
             'node1',
             $transport,
-            new CorrelationRegistry(),
-            new ActionIdGenerator('node1')
+            new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry())
         );
+        
+        // Move to healthy first, otherwise events are dropped (Phase 4 Task 5)
+        $client->open();
+        $onDataCallback("Asterisk Call Manager/5.0.1\r\n");
+        $client->processTick();
         
         $received = [];
         $client->onEvent('TestEvent', function(AmiEvent $e) use (&$received) {
@@ -96,12 +102,11 @@ class FloodControlTest extends TestCase
     public function test_backpressure_exception_on_max_pending(): void
     {
         $transport = $this->createMock(TransportInterface::class);
-        $correlation = new CorrelationRegistry(1);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry(1));
         $client = new AmiClient(
             'node1',
             $transport,
-            $correlation,
-            new ActionIdGenerator('node1')
+            $correlation
         );
         
         $action1 = new \Apn\AmiClient\Protocol\GenericAction('Action1');
@@ -119,8 +124,7 @@ class FloodControlTest extends TestCase
         $client = new AmiClient(
             'node1',
             $transport,
-            new CorrelationRegistry(),
-            new ActionIdGenerator('node1')
+            new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry())
         );
         
         $client->setMemoryLimit(100); // Very low limit

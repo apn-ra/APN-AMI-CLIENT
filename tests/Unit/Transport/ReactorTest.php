@@ -32,6 +32,36 @@ class ReactorTest extends TestCase
         }
     }
 
+    private function awaitConnect(Reactor $reactor, TcpTransport $t1, TcpTransport $t2): array
+    {
+        $c1 = null;
+        $c2 = null;
+        for ($i = 0; $i < 20; $i++) {
+            $reactor->tick(10);
+
+            if (!$c1) {
+                $c1 = @stream_socket_accept($this->server, 0);
+                if ($c1) {
+                    stream_set_blocking($c1, false);
+                }
+            }
+            if (!$c2) {
+                $c2 = @stream_socket_accept($this->server, 0);
+                if ($c2) {
+                    stream_set_blocking($c2, false);
+                }
+            }
+
+            if ($t1->isConnected() && $t2->isConnected() && $c1 && $c2) {
+                break;
+            }
+
+            usleep(10000);
+        }
+
+        return [$c1, $c2];
+    }
+
     public function testReactorMultiplexing(): void
     {
         $reactor = new Reactor();
@@ -44,14 +74,7 @@ class ReactorTest extends TestCase
         $t2->open();
         $reactor->register('t2', $t2);
 
-        $c1 = null;
-        $c2 = null;
-        for ($i = 0; $i < 10; $i++) {
-            if (!$c1) $c1 = @stream_socket_accept($this->server, 0);
-            if (!$c2) $c2 = @stream_socket_accept($this->server, 0);
-            if ($c1 && $c2) break;
-            usleep(10000);
-        }
+        [$c1, $c2] = $this->awaitConnect($reactor, $t1, $t2);
         
         $this->assertNotNull($c1);
         $this->assertNotNull($c2);

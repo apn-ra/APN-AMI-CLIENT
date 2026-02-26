@@ -6,6 +6,7 @@ namespace Tests\Integration;
 
 use Apn\AmiClient\Cluster\AmiClientManager;
 use Apn\AmiClient\Core\AmiClient;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
@@ -26,8 +27,8 @@ class MultiServerIsolationTest extends TestCase
         $t2_callback = null;
         $t2->method('onData')->willReturnCallback(function($cb) use (&$t2_callback) { $t2_callback = $cb; });
         
-        $c1 = new AmiClient('node1', $t1, new CorrelationRegistry(), new ActionIdGenerator('node1'));
-        $c2 = new AmiClient('node2', $t2, new CorrelationRegistry(), new ActionIdGenerator('node2'));
+        $c1 = new AmiClient('node1', $t1, new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry()));
+        $c2 = new AmiClient('node2', $t2, new CorrelationManager(new ActionIdGenerator('node2'), new CorrelationRegistry()));
         
         $manager->addClient('node1', $c1);
         $manager->addClient('node2', $c2);
@@ -77,8 +78,8 @@ class MultiServerIsolationTest extends TestCase
         $t2->method('onData')->willReturnCallback(function($cb) use (&$t2_callback) { $t2_callback = $cb; });
         
         // Note: they use the same instance id if we're not careful, but ActionIdGenerator includes serverKey
-        $c1 = new AmiClient('node1', $t1, new CorrelationRegistry(), new ActionIdGenerator('node1', 'worker1'));
-        $c2 = new AmiClient('node2', $t2, new CorrelationRegistry(), new ActionIdGenerator('node2', 'worker1'));
+        $c1 = new AmiClient('node1', $t1, new CorrelationManager(new ActionIdGenerator('node1', 'worker1'), new CorrelationRegistry()));
+        $c2 = new AmiClient('node2', $t2, new CorrelationManager(new ActionIdGenerator('node2', 'worker1'), new CorrelationRegistry()));
         
         $p1 = $c1->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));
         $p2 = $c2->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));

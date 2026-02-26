@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Protocol;
 
-use Apn\AmiClient\Protocol\Strategies\MultiResponseStrategy;
+use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 
 /**
  * AMI QueueSummary action.
@@ -29,7 +29,7 @@ final readonly class QueueSummary extends Action
         parent::__construct(
             $parameters,
             $actionId,
-            new MultiResponseStrategy('QueueSummaryComplete')
+            new MultiEventStrategy('QueueSummaryComplete')
         );
     }
 

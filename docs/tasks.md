@@ -1,126 +1,127 @@
 # APN AMI Client: Implementation Task Checklist
 
-## 1. Package Identity & Structure
-1.1 [x] Define Composer name `apn/ami-client` and PSR-4 namespace `Apn\AmiClient\`.
-1.2 [x] Set minimum PHP version 8.4+ in `composer.json`.
-1.3 [x] Establish directory structure (`src/Core`, `src/Cluster`, `src/Protocol`, etc.) as per Section 1.
+## Phase 0 --- Architectural Corrections
+1. [x] Define Composer name `apn/ami-client` and PSR-4 namespace `Apn\AmiClient\`.
+2. [x] Set minimum PHP version 8.4+ in `composer.json`.
+3. [x] Establish directory structure (`src/Core`, `src/Cluster`, `src/Protocol`, etc.) as per Section 1.
+4. [x] Ensure Core layers remain strictly framework-agnostic (no `Illuminate\*` imports).
+5. [x] Remove any ActionID logic from Transport layer (Transport must only handle byte I/O).
+6. [x] Ensure Transport only handles byte I/O.
+7. [x] Move correlation responsibilities (ActionID generation, mapping) to Correlation/Client layer.
+8. [x] Implement `AmiClientManager` construction with `ServerRegistry`, `ClientOptions`, and `LoggerInterface`.
 
-## 2. Dependency & Boundary Contract
-2.1 [x] Ensure Core layers remain strictly framework-agnostic (no `Illuminate\*` imports).
-2.2 [x] Integrate `psr/log` for structured logging.
-2.3 [x] Audit Core directory to ensure zero dependencies on `Symfony\Console` or Laravel helpers.
+## Phase 1 --- Core Transport & Parser Hardening
+1. [x] Implement `TransportInterface` with `read()`, `write()`, and `getStream()` for multiplexing.
+2. [x] Implement outbound `WriteBuffer` with partial write handling.
+3. [x] Enforce per-server write buffer caps (default 5MB) and throw `BackpressureException`.
+4. [x] Parser: Handle both `\r\n\r\n` and defensive `\n\n` as frame boundaries.
+5. [x] Parser: Enforce strict 64KB hard limit for individual AMI frames.
+6. [x] Parser: Enforce strict per-server buffer cap (e.g., 2MB) for the cumulative parser buffer.
+7. [x] Parser: Implement desync recovery (discard bytes until next double-newline).
+8. [x] Parser: Implement key normalization (lowercase) and duplicate key handling (arrays).
+9. [x] Add unit tests for parser corruption resync and buffer limits.
+10. [x] Implement secret redaction for `Secret`, `Password`, and sensitive AMI variables in logs.
 
-## 3. Runtime Profiles
-3.1 [x] Implement Profile A: Manual instantiation of `AmiClientManager` and manual `tick()` loop.
-3.2 [x] Implement Profile B: Laravel Artisan Worker via `ami:listen` command.
-3.3 [x] Implement Profile C: Embedded Tick Mode (external event loop integration).
-3.4 [x] Ensure runtime ownership is external (core provides the mechanism, environment provides the loop).
+## Phase 2 --- Correlation & Completion Strategy
+1. [x] Define `CompletionStrategyInterface` contract fields:
+    - `max_duration_ms`
+    - `max_messages`
+    - `terminal_event_names`
+    - `timeout` behavior
+2. [x] Implement `CorrelationManager` for globally unique ActionID generation.
+3. [x] Enforce formalized ActionID contract: `{server_key}:{instance_id}:{sequence_id}`.
+4. [x] Implement `SingleResponseStrategy`.
+5. [x] Implement `MultiEventStrategy`.
+6. [x] Implement `FollowsResponseStrategy`.
+7. [x] Implement immutable `GenericAction` DTO with support for strategy overrides.
+8. [x] Add timeout tests and overflow tests for completion strategies.
 
-## 4. Construction & Lifecycle
-4.1 [x] Implement `AmiClientManager` construction with `ServerRegistry`, `ClientOptions`, and `LoggerInterface`.
-4.2 [x] Support Lazy-open connection strategy (connect only when first action is sent).
-4.3 [x] Support Eager-open connection strategy (connect all configured servers via `connectAll()`).
+## Phase 3 --- Cluster Multiplexing & Fairness
+1. [x] Implement cluster-level `stream_select()` aggregation.
+2. [x] Implement `max_frames_per_tick` budget.
+3. [x] Implement `max_events_per_tick` budget.
+4. [x] Implement `max_bytes_read_per_tick` budget.
+5. [x] Implement `max_connect_attempts_per_tick` throttling.
+6. [x] Enforce per-server event queue caps.
+7. [x] Add unit and integration tests for fairness.
 
-## 5. Core Architecture Overview
-5.1 [x] Implement Cluster Layer: Orchestrate multiple client instances.
-5.2 [x] Implement Transport Layer: Non-blocking socket I/O for single servers.
-5.3 [x] Implement Protocol Layer: AMI framing and Message/Action serialization.
-5.4 [x] Implement Correlation Layer: Globally unique ActionIDs and PendingAction registry.
-5.5 [x] Implement Health & Lifecycle Layer: State tracking and heartbeats.
-5.6 [x] Implement Event Ingestion Layer: Distribute parsed events to listeners.
-5.7 [x] Implement Laravel Integration Layer: ServiceProvider and framework glue.
+## Phase 4 --- Health, Reconnect & Isolation
+1. [x] Implement explicit connection state machine.
+2. [x] Implement explicit login/authentication state machine.
+3. [x] Add login timeout enforcement.
+4. [x] Implement banner handling.
+5. [x] Prevent event dispatch before AUTHENTICATING completes.
+6. [x] Implement exponential backoff with jitter for reconnection.
+7. [x] Implement cluster-wide connection attempt throttling (Reconnect Storm protection).
+8. [x] Validate isolation under simulated parser corruption.
+9. [x] Validate isolation during reconnect storm simulation.
+10. [x] Add integration tests for login failure + recovery.
 
-## 6. Non-Blocking Transport & I/O Architecture
-6.1 [x] Multiplex I/O using `stream_select()` for all connections.
-6.2 [x] Implement `tick(int $timeoutMs)` logic to drive I/O and protocol parsing.
-6.3 [x] Implement outbound `WriteBuffer` with partial write handling.
-6.4 [x] Enforce `5MB` max buffer size and throw `BackpressureException` on overflow.
-6.5 [x] Define and implement `TransportInterface` (`open()`, `close()`, `send()`, `tick()`).
+## Phase 5 --- Laravel Adapter Integration
+1. [x] Map configuration arrays to `ServerConfig` and `ClientOptions` DTOs.
+2. [x] Bind `AmiClientManager` as a singleton in the service container.
+3. [x] Provide `Ami` facade and `ami:listen` Artisan command for worker Profile B.
+4. [x] Document recommended dedicated `ami:listen` pattern (Event Bridge).
+5. [x] Add warning section about connection explosion in Laravel topology documentation.
+6. [x] Provide configuration example for Redis event bridge integration.
 
-## 7. Generic Action Framework
-7.1 [x] Implement immutable `GenericAction` DTO for arbitrary AMI actions.
-7.2 [x] Support `CompletionStrategyInterface` with `SingleResponseStrategy` as default.
-7.3 [x] Support overriding strategies for multi-message or async event completion.
+## Phase 6 --- Stability & Soak Testing
+1. [x] Achieve 100% unit coverage for Parser, Correlation, and Routing logic.
+2. [x] Execute Flood Simulation (10x normal load) to verify drop policy and fairness.
+3. [x] Execute Reconnect Storm simulation to verify backoff/jitter stability.
+4. [x] Execute 24h Soak Test to verify zero memory growth.
 
-## 8. Command Action & Follows Parsing
-8.1 [x] Implement `Response: Follows` recognition logic in the parser.
-8.2 [x] Implement sentinel-based termination (`--END COMMAND--`) for `Command` output.
-8.3 [x] Enforce memory protection for follows responses (Max Output Size limit).
-8.4 [x] Implement `FollowsResponseStrategy` to resolve after termination.
+## Action Strategy Roadmap
+1. [x] v1 Core (Minimal): Login, Logoff, Ping, GenericAction.
+2. [x] v1.5 Common Dialer Extensions: Originate, Hangup, Redirect, SetVar, GetVar, Command (Follows).
+3. [x] v2 Extended Action Set: QueueStatus, Status, QueueSummary, PJSIPShowEndpoint, etc.
 
-## 9. Event Ingestion & Subscription Model
-9.1 [x] Implement immutable `AmiEvent` object with normalized fields and `server_key`.
-9.2 [x] Implement Subscription API: `onAnyEvent()` and `onEvent(string $eventName)`.
-9.3 [x] Support server-scoped event subscriptions via `AmiClient` instances.
-9.4 [x] Implement header-based filtering mechanism for events.
+## Acceptance Criteria
+1. [ ] Verify Generic Support: Send any AMI action using `GenericAction`.
+2. [ ] Verify Event Handling: Subscribe to any AMI event by name.
+3. [ ] Verify Memory Stability: Zero leakage over 24h execution (verified via soak test).
+4. [ ] Verify Node Isolation: Failure/flood of one node does not impact others.
+5. [ ] Verify Backpressure Safety: Event drops and buffer overflows handled gracefully.
+6. [ ] Verify Follows Support: `Command` output correctly captured and terminated.
+7. [ ] Verify Cluster Fairness: Noisy nodes do not starve others.
+8. [ ] Verify Reconnect Storm Mitigation: Cluster-wide throttling and jittered backoff working.
+9. [ ] Verify ActionID Integrity: All ActionIDs follow the `{server}:{instance}:{seq}` contract and are generated above the transport layer.
 
-## 10. Flood Control & Backpressure Rules
-10.1 [x] Implement bounded per-server event queues (default 10,000).
-10.2 [x] Implement FIFO drop policy for event queues when full.
-10.3 [x] Support event type filtering at ingestion to save memory.
-10.4 [x] Log warning metrics for every event drop with current queue depth and server key.
+## Production Readiness Checklist (Audit-Driven)
 
-## 11. Logging Contract
-11.1 [x] Depend strictly on `psr/log` and default to `NullLogger`.
-11.2 [x] Include mandatory fields (`server_key`, `action_id`, `queue_depth`) in all logs.
-11.3 [x] Implement secret redaction for `Secret`, `Password`, and sensitive AMI variables.
-11.4 [x] Avoid logging raw frames unless in `DEBUG` mode with sensitive data removed.
+### Phase P0 (Blockers)
+1. [x] Task ID: `PR-P0-01` | Severity: `P0` | Target: `src/Core/AmiClient.php`, `src/Health/*` | Implement explicit async connect state machine `DISCONNECTED -> CONNECTING -> CONNECTED -> AUTHENTICATING -> READY` per node. Acceptance: state transitions are deterministic and covered by unit tests.
+2. [x] Task ID: `PR-P0-02` | Severity: `P0` | Target: `src/Transport/StreamTransport.php`, `src/Core/AmiClient.php` | Replace blocking connect path with `STREAM_CLIENT_ASYNC_CONNECT` and complete handshake via write-readiness + socket error checks in tick flow. Acceptance: no blocking socket connect call remains in `processTick()`/`tick()` path.
+3. [x] Task ID: `PR-P0-03` | Severity: `P0` | Target: `src/Cluster/AmiClientManager.php`, `src/Core/AmiClient.php`, `tests/Integration/*` | Add regression test for non-blocking connect under unreachable host / slow SYN path while tick continues servicing other nodes. Acceptance: at least one healthy node continues read/write work while another node remains in `CONNECTING`.
+4. [x] Task ID: `PR-P0-04` | Severity: `P0` | Target: `src/Core/ClientOptions.php`, `src/Health/*`, `config/*` | Redefine `connectTimeout` as maximum `CONNECTING` duration (non-blocking). Acceptance: timeout triggers reconnect scheduling without blocking a tick.
+5. [x] Task ID: `PR-P0-05` | Severity: `P0` | Target: `src/Cluster/AmiClientManager.php`, `src/Health/ReconnectScheduler.php`, `tests/Integration/*` | Implement reconnect fairness using a round-robin reconnect cursor that cannot starve later nodes when `maxConnectAttemptsPerTick` is capped. Acceptance: starvation regression test with >N nodes confirms eventual attempt distribution across all eligible nodes.
 
-## 12. Multi-Server Management & Routing
-12.1 [x] Implement `AmiClientManager` methods: `server()`, `default()`, `tickAll()`, and `routing()`.
-12.2 [x] Implement `RoutingStrategyInterface` for node selection logic.
-12.3 [x] Implement strategies: `Explicit`, `Round-Robin`, `Failover`, and `Health-Aware`.
+### Phase P1 (High)
+1. [x] Task ID: `PR-P1-01` | Severity: `P1` | Target: `src/Core/AmiClient.php` | Wrap each event listener invocation in `try/catch` and continue dispatch after failures. Acceptance: listener throw isolation test proves one throwing listener does not block other listeners/events.
+2. [x] Task ID: `PR-P1-02` | Severity: `P1` | Target: `src/Cluster/AmiClientManager.php` | Apply identical per-listener exception isolation in manager-level listener fan-out. Acceptance: manager-level listener throw does not stop remaining listeners or server processing.
+3. [x] Task ID: `PR-P1-03` | Severity: `P1` | Target: `src/Core/AmiClient.php`, `src/Exceptions/*`, `tests/Unit/*` | Enforce `send()` gating: allow only in `READY`, otherwise throw typed exception containing `server_key` and connection state. Acceptance: tests verify `send()` while `DISCONNECTED`/`AUTHENTICATING` fails fast with typed exception.
+4. [x] Task ID: `PR-P1-04` | Severity: `P1` | Target: `src/Core/*`, `src/Health/*` | Standardize reconnect/connect failure logging fields: `server_key`, `host`, `port`, `attempt`, `backoff`, `next_retry_at`. Acceptance: integration logs include all mandatory fields for failed connect and scheduled retry.
+5. [x] Task ID: `PR-P1-05` | Severity: `P1` | Target: `scripts/*`, `composer.json`, CI workflow files | Add/keep CI guard enforcing no `Illuminate\\*` imports outside `src/Laravel/`. Acceptance: CI fails when framework imports appear in core namespaces and passes for valid adapter-only usage.
 
-## 13. Action Strategy Roadmap
-13.1 [x] v1 Core (Minimal): Implement Login, Logoff, Ping, GenericAction.
-13.2 [x] v1.5 Common Dialer Extensions:
-    - [x] Originate
-    - [x] Hangup
-    - [x] Redirect
-    - [x] SetVar
-    - [x] GetVar
-    - [x] Command (Follows)
-13.3 [x] v2 Extended Action Set (QueueStatus, PJSIPShowEndpoint, etc.)
+### Phase P2 (Medium)
+1. [x] Task ID: `PR-P2-01` | Severity: `P2` | Target: `src/Core/ClientOptions.php`, `src/Core/AmiClient.php`, `docs/*` | Implement `readTimeout` as idle-read liveness threshold for non-blocking loop (not blocking socket timeout) and document behavior consistently. Acceptance: idle read threshold triggers health/reconnect policy and docs/config semantics match implementation.
+2. [x] Task ID: `PR-P2-02` | Severity: `P2` | Target: `src/Health/CircuitBreaker.php`, `src/Health/*`, `config/*` | Implement per-node circuit breaker states `CLOSED`, `OPEN`, `HALF_OPEN` with configurable failure threshold and cooldown. Acceptance: breaker opens after threshold failures and blocks normal reconnect attempts while open.
+3. [x] Task ID: `PR-P2-03` | Severity: `P2` | Target: `src/Health/CircuitBreaker.php`, `src/Cluster/AmiClientManager.php`, `tests/Integration/*` | Implement `HALF_OPEN` probe rules (limited probes, close on success, reopen on failure) and transition logging. Acceptance: integration tests validate probe behavior and logs include breaker transition reason/counters.
 
-## 14. Protocol Parser & Safety
-14.1 [x] Implement framing detection using `\r\n\r\n` delimiter.
-14.2 [x] Implement key normalization (lowercase) and duplicate key handling (arrays).
-14.3 [x] Enforce 64KB hard limit for individual AMI frames.
-14.4 [x] Implement desync recovery (discard bytes until next `\r\n\r\n`).
-14.5 [x] Enforce strict upper bound on parser buffer memory growth.
+### Phase P3 (Low/Polish)
+1. [x] Task ID: `PR-P3-01` | Severity: `P3` | Target: `src/*` logging call sites, `docs/*` | Standardize `queue_depth` field naming and presence across queue/backpressure/reconnect logs. Acceptance: log contract examples and tests show consistent `queue_depth` output where queue metrics are emitted.
 
-## 15. Connection Lifecycle & Health
-15.1 [x] Implement per-server State Machine (DISCONNECTED, CONNECTING, AUTHENTICATING, etc.).
-15.2 [x] Implement heartbeat logic via AMI `Ping` every 15s.
-15.3 [x] Implement exponential backoff with jitter (100ms - 30s) for reconnection.
-15.4 [x] Implement Circuit Breaker to mark connections as fatal after repeated failures.
+## Append: BATCH-PR-20260226-02
 
-## 16. Worker & Runtime Model
-16.1 [x] Implement graceful shutdown: catch `SIGTERM/SIGINT`, flush buffers, send `Logoff`.
-16.2 [x] Ensure strictly non-blocking operation (no `sleep()` or blocking I/O allowed).
-16.3 [x] Implement deterministic tick loop (I/O, Parsing, Correlation Sweep, Health).
+### Phase P1
+1. [ ] PR2-P1-01 (BATCH-PR-20260226-02) Target: `src/Protocol/Parser.php`, `src/Core/ClientOptions.php` | Make Parser max frame size configurable via `ClientOptions`; safe default; bounded caps. Acceptance: default supports large AMI payloads; cap still enforced; docs updated.
+2. [ ] PR2-P1-02 (BATCH-PR-20260226-02) Target: `tests/Unit/Protocol/*`, `tests/Integration/*`, `src/Protocol/Parser.php` | Add parser tests: large frame accepted under limit; oversize triggers controlled failure; parser recovers/no corruption. Acceptance: tests cover accept/reject paths and verify recovery after oversize frame.
+3. [ ] PR2-P1-03 (BATCH-PR-20260226-02) Target: `src/Correlation/CorrelationRegistry.php`, `src/Exceptions/*` | Fix CorrelationRegistry semantics: no synthetic success when response missing; allow only event-only strategies. Acceptance: missing response yields typed failure or timeout; synthetic response only for explicitly event-only strategies.
+4. [ ] PR2-P1-04 (BATCH-PR-20260226-02) Target: `tests/Unit/Correlation/*`, `tests/Integration/*`, `src/Correlation/CorrelationRegistry.php` | Add correlation tests: missing response => typed failure; event-only strategy completes without response (explicitly). Acceptance: tests assert missing response failures and event-only success path.
 
-## 17. Laravel Integration Layer (Adapter)
-17.1 [x] Map configuration arrays to `ServerConfig` and `ClientOptions` DTOs.
-17.2 [x] Bind `AmiClientManager` as a singleton in the service container.
-17.3 [x] Bind default `RoutingStrategyInterface` in the Service Provider.
-17.4 [x] Inject the Laravel/PSR logger into the manager.
-17.5 [x] Provide `Ami` facade for convenient application access.
-17.6 [x] Provide `ami:listen` Artisan command for worker Profile B.
-17.7 [x] (Optional) Implement bridging of AMI events to Laravel's native event system.
-
-## 18. Testing Strategy
-18.1 [x] Achieve 100% unit coverage for Parser, Correlation, and Routing logic.
-18.2 [x] Implement integration tests using mock socket servers for multi-server scenarios.
-18.3 [x] Create Flood Simulation test (10x load) to verify drop policies.
-18.4 [x] Create Reconnect Storm simulation to verify backoff/jitter stability.
-18.5 [x] Create Parser Corruption test to verify re-sync logic.
-18.6 [x] Execute 24h Soak Test to verify zero memory growth.
-
-## 19. Acceptance Criteria
-19.1 [ ] Verify Generic Support: Send any AMI action using `GenericAction`.
-19.2 [ ] Verify Event Handling: Subscribe to any AMI event by name.
-19.3 [ ] Verify Memory Stability: Zero leakage over 24h execution.
-19.4 [ ] Verify Node Isolation: Failure of one node does not impact others.
-19.5 [ ] Verify Backpressure Safety: Event drops and buffer overflows handled gracefully.
-19.6 [ ] Verify Follows Support: `Command` output correctly captured and terminated.
+### Phase P2
+1. [ ] PR2-P2-01 (BATCH-PR-20260226-02) Target: `src/Core/Logger.php`, `src/Core/AmiClient.php`, `docs/*` | Standardize `queue_depth` logging (normalize to null and enforce in queue/backpressure logs). Acceptance: queue-related log entries consistently include `queue_depth` (or null) in documented categories.
+2. [ ] PR2-P2-02 (BATCH-PR-20260226-02) Target: `src/Core/SecretRedactor.php`, `src/Core/ClientOptions.php`, `config/*` | Expand/configure secret redaction policy; regex matching; `ClientOptions` injection. Acceptance: default redaction masks password/secret/token/auth/key patterns; policy is configurable.
+3. [ ] PR2-P2-03 (BATCH-PR-20260226-02) Target: `tests/Unit/Logging/*`, `tests/Unit/Core/*`, `src/Core/SecretRedactor.php` | Add redaction tests (password/token/auth/key fields and regex matches). Acceptance: tests cover key list and regex matching for redaction.
+4. [ ] PR2-P2-04 (BATCH-PR-20260226-02) Target: `src/Correlation/ActionIdGenerator.php`, `src/Core/ClientOptions.php` | Bound ActionID length with truncation+hash scheme; preserve uniqueness. Acceptance: generated ActionIDs are bounded; truncation preserves uniqueness via stable hash suffix.
+5. [ ] PR2-P2-05 (BATCH-PR-20260226-02) Target: `tests/Unit/Correlation/*`, `src/Correlation/ActionIdGenerator.php` | Add ActionID tests: long `server_key` produces bounded ActionID; uniqueness preserved across nodes. Acceptance: tests assert max length and uniqueness across different `server_key` inputs.

@@ -22,5 +22,8 @@
     "config": {
         "sort-packages": true
     },
+    "scripts": {
+        "check:core-boundaries": "php scripts/validate_guidelines.php"
+    },
     "minimum-stability": "stable"
 }

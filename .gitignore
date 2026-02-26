@@ -30,3 +30,4 @@ Homestead.json
 auth.json
 .vscode/
 .idea
+docs/prompts/*

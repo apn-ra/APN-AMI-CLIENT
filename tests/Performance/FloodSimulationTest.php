@@ -4,87 +4,113 @@ declare(strict_types=1);
 
 namespace Tests\Performance;
 
+use Apn\AmiClient\Cluster\AmiClientManager;
+use Apn\AmiClient\Cluster\ClientOptions;
+use Apn\AmiClient\Cluster\ServerRegistry;
 use Apn\AmiClient\Core\AmiClient;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\EventQueue;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
+use Apn\AmiClient\Events\AmiEvent;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
+use Psr\Log\LoggerInterface;
 
 class FloodSimulationTest extends TestCase
 {
-    public function test_flood_simulation(): void
+    public function test_flood_simulation_drop_policy_and_fairness(): void
     {
-        $transport = $this->createMock(TransportInterface::class);
+        $normalLoad = 1000;
+        $floodLoad = $normalLoad * 10;
+        $capacity = $normalLoad * 5;
+        $maxEventsPerTick = $normalLoad;
+        $maxFramesPerTick = $floodLoad;
+
+        $logger = $this->createStub(LoggerInterface::class);
+
+        ['client' => $clientA, 'onData' => $onDataA] = $this->createClient(
+            'node-a',
+            $capacity,
+            $maxFramesPerTick,
+            $maxEventsPerTick,
+            $logger
+        );
+
+        ['client' => $clientB, 'onData' => $onDataB] = $this->createClient(
+            'node-b',
+            $capacity,
+            $maxFramesPerTick,
+            $maxEventsPerTick,
+            $logger
+        );
+
+        $receivedA = 0;
+        $receivedB = 0;
+
+        $clientA->onAnyEvent(function (AmiEvent $event) use (&$receivedA): void {
+            $receivedA++;
+        });
+
+        $clientB->onAnyEvent(function (AmiEvent $event) use (&$receivedB): void {
+            $receivedB++;
+        });
+
+        for ($i = 0; $i < $floodLoad; $i++) {
+            $onDataA("Event: FloodEvent\r\n\r\n");
+        }
+
+        for ($i = 0; $i < $normalLoad; $i++) {
+            $onDataB("Event: NormalEvent\r\n\r\n");
+        }
+
+        $manager = new AmiClientManager(new ServerRegistry(), new ClientOptions());
+        $manager->addClient('node-a', $clientA);
+        $manager->addClient('node-b', $clientB);
+        $manager->tickAll(0);
+
+        $this->assertSame($maxEventsPerTick, $receivedA);
+        $this->assertSame($normalLoad, $receivedB);
+
+        $healthA = $clientA->health();
+        $healthB = $clientB->health();
+
+        $this->assertSame($floodLoad - $capacity, $healthA['dropped_events']);
+        $this->assertSame(0, $healthB['dropped_events']);
+    }
+
+    /**
+     * @return array{client: AmiClient, onData: callable(string): void}
+     */
+    private function createClient(
+        string $serverKey,
+        int $capacity,
+        int $maxFramesPerTick,
+        int $maxEventsPerTick,
+        LoggerInterface $logger
+    ): array {
+        $transport = $this->createStub(TransportInterface::class);
+        $transport->method('isConnected')->willReturn(true);
+
         $onDataCallback = null;
-        $transport->method('onData')->willReturnCallback(function($callback) use (&$onDataCallback) {
+        $transport->method('onData')->willReturnCallback(function (callable $callback) use (&$onDataCallback): void {
             $onDataCallback = $callback;
         });
-        
-        // Mock logger to avoid spamming stdout during flood
-        $logger = $this->createMock(\Apn\AmiClient\Core\Logger::class);
-        
+
         $client = new AmiClient(
-            'node1',
+            $serverKey,
             $transport,
-            new CorrelationRegistry(100),
-            new ActionIdGenerator('node1'),
-            logger: $logger
+            new CorrelationManager(new ActionIdGenerator($serverKey), new CorrelationRegistry()),
+            eventQueue: new EventQueue($capacity),
+            logger: $logger,
+            maxFramesPerTick: $maxFramesPerTick,
+            maxEventsPerTick: $maxEventsPerTick
         );
-        
-        $client->onAnyEvent(function() { /* do nothing */ });
 
-        // Simulate 1000 events
-        for ($i = 0; $i < 1000; $i++) {
-            $onDataCallback("Event: TestEvent\r\n\r\n");
+        if (!is_callable($onDataCallback)) {
+            throw new \RuntimeException('Transport onData callback was not registered.');
         }
-        
-        /** @var EventQueue $queue */
-        $queue = $this->getProperty($client, 'eventQueue');
-        
-        // Default capacity is 10000, so none should be dropped yet.
-        $this->assertEquals(1000, $queue->count());
-        $this->assertEquals(0, $queue->getDroppedEventsCount());
-        
-        // Replace with a new client with low capacity queue to test drop policy
-        $lowCapacityQueue = new EventQueue(100);
-        $client = new AmiClient(
-            'node1',
-            $transport,
-            new CorrelationRegistry(100),
-            new ActionIdGenerator('node1'),
-            eventQueue: $lowCapacityQueue,
-            logger: $logger
-        );
-        
-        // The transport onData was registered in constructor, we need to get the new one
-        $reflection = new ReflectionClass($client);
-        $onRawDataMethod = $reflection->getMethod('onRawData');
-        $onDataCallback = $onRawDataMethod->getClosure($client);
 
-        // We expect warnings for each dropped event
-        $logger->expects($this->exactly(200))->method('warning');
-        
-        for ($i = 0; $i < 300; $i++) {
-             $onDataCallback("Event: Overflow\r\n\r\n");
-        }
-        
-        $this->assertEquals(100, $lowCapacityQueue->count());
-        $this->assertEquals(200, $lowCapacityQueue->getDroppedEventsCount());
-    }
-
-    private function getProperty(object $object, string $propertyName)
-    {
-        $reflection = new ReflectionClass($object);
-        $property = $reflection->getProperty($propertyName);
-        return $property->getValue($object);
-    }
-    
-    private function setProperty(object $object, string $propertyName, mixed $value): void
-    {
-        $reflection = new ReflectionClass($object);
-        $property = $reflection->getProperty($propertyName);
-        $property->setValue($object, $value);
+        return ['client' => $client, 'onData' => $onDataCallback];
     }
 }

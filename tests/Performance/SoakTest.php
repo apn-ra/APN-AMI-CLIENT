@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Performance;
 
 use Apn\AmiClient\Core\AmiClient;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\Logger;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
@@ -20,24 +21,25 @@ class SoakTest extends TestCase
      */
     public function test_memory_stability_under_load(): void
     {
-        $iterations = 10000;
-        $connectionsCount = 10;
+        $iterations = (int) (getenv('SOAK_ITERATIONS') ?: 10000);
+        $connectionsCount = (int) (getenv('SOAK_CONNECTIONS') ?: 10);
+        $warmupIterations = (int) (getenv('SOAK_WARMUP_ITERATIONS') ?: 500);
+        $memoryToleranceBytes = (int) (getenv('SOAK_MEMORY_TOLERANCE_BYTES') ?: 1024 * 1024);
         $clients = [];
 
-        $logger = $this->createMock(Logger::class);
+        $logger = $this->createStub(Logger::class);
 
         // Base memory after bootstrap
         gc_collect_cycles();
         $startMemory = memory_get_usage();
 
         for ($i = 0; $i < $connectionsCount; $i++) {
-            $transport = $this->createMock(TransportInterface::class);
+            $transport = $this->createStub(TransportInterface::class);
             
             $client = new AmiClient(
                 "node_$i",
                 $transport,
-                new CorrelationRegistry(5000), // Higher limit
-                new ActionIdGenerator("node_$i"),
+                new CorrelationManager(new ActionIdGenerator("node_$i"), new CorrelationRegistry(5000)),
                 parser: new Parser(),
                 logger: $logger
             );
@@ -63,7 +65,7 @@ class SoakTest extends TestCase
         }
 
         // Warm up
-        for ($i = 0; $i < 500; $i++) {
+        for ($i = 0; $i < $warmupIterations; $i++) {
             $this->simulateTraffic($clients);
         }
         
@@ -79,7 +81,7 @@ class SoakTest extends TestCase
                 $currentMemory = memory_get_usage();
                 echo "Iteration $i, Memory: " . $currentMemory . PHP_EOL;
                 // Check for growth relative to baseline
-                $this->assertLessThan($baselineMemory + 1024 * 1024, $currentMemory, "Significant memory growth detected at iteration $i");
+                $this->assertLessThan($baselineMemory + $memoryToleranceBytes, $currentMemory, "Significant memory growth detected at iteration $i");
             }
         }
 
@@ -89,7 +91,7 @@ class SoakTest extends TestCase
         $endMemory = memory_get_usage();
 
         // End memory should be close to start memory
-        $this->assertLessThan($startMemory + 1024 * 1024, $endMemory, "Memory leak detected after cleanup");
+        $this->assertLessThan($startMemory + $memoryToleranceBytes, $endMemory, "Memory leak detected after cleanup");
     }
 
     /**

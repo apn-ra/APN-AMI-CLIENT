@@ -11,9 +11,10 @@ enum HealthStatus: string
 {
     case DISCONNECTED = 'disconnected';
     case CONNECTING = 'connecting';
+    case CONNECTED = 'connected';
     case AUTHENTICATING = 'authenticating';
-    case CONNECTED_HEALTHY = 'connected_healthy';
-    case CONNECTED_DEGRADED = 'connected_degraded';
+    case READY = 'ready';
+    case READY_DEGRADED = 'ready_degraded';
     case RECONNECTING = 'reconnecting';
 
     /**
@@ -21,6 +22,6 @@ enum HealthStatus: string
      */
     public function isAvailable(): bool
     {
-        return $this === self::CONNECTED_HEALTHY;
+        return $this === self::READY;
     }
 }

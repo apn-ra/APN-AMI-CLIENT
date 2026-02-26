@@ -19,9 +19,9 @@ class RoutingTest extends TestCase
         $strategy = new RoundRobinRoutingStrategy();
         
         $c1 = $this->createMock(AmiClientInterface::class);
-        $c1->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c1->method('getHealthStatus')->willReturn(HealthStatus::READY);
         $c2 = $this->createMock(AmiClientInterface::class);
-        $c2->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c2->method('getHealthStatus')->willReturn(HealthStatus::READY);
         
         $clients = ['n1' => $c1, 'n2' => $c2];
         
@@ -37,7 +37,7 @@ class RoutingTest extends TestCase
         $c1 = $this->createMock(AmiClientInterface::class);
         $c1->method('getHealthStatus')->willReturn(HealthStatus::DISCONNECTED);
         $c2 = $this->createMock(AmiClientInterface::class);
-        $c2->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c2->method('getHealthStatus')->willReturn(HealthStatus::READY);
         
         $clients = ['n1' => $c1, 'n2' => $c2];
         
@@ -50,9 +50,9 @@ class RoutingTest extends TestCase
         $strategy = new RoundRobinRoutingStrategy();
         
         $c1 = $this->createMock(AmiClientInterface::class);
-        $c1->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_DEGRADED);
+        $c1->method('getHealthStatus')->willReturn(HealthStatus::READY_DEGRADED);
         $c2 = $this->createMock(AmiClientInterface::class);
-        $c2->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c2->method('getHealthStatus')->willReturn(HealthStatus::READY);
         
         $clients = ['n1' => $c1, 'n2' => $c2];
         
@@ -66,7 +66,7 @@ class RoutingTest extends TestCase
         $c1 = $this->createMock(AmiClientInterface::class);
         $c1->method('getHealthStatus')->willReturn(HealthStatus::DISCONNECTED);
         $c2 = $this->createMock(AmiClientInterface::class);
-        $c2->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c2->method('getHealthStatus')->willReturn(HealthStatus::READY);
         
         $clients = ['n1' => $c1, 'n2' => $c2];
         
@@ -78,9 +78,9 @@ class RoutingTest extends TestCase
         $strategy = new ExplicitRoutingStrategy('n2');
         
         $c1 = $this->createMock(AmiClientInterface::class);
-        $c1->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c1->method('getHealthStatus')->willReturn(HealthStatus::READY);
         $c2 = $this->createMock(AmiClientInterface::class);
-        $c2->method('getHealthStatus')->willReturn(HealthStatus::CONNECTED_HEALTHY);
+        $c2->method('getHealthStatus')->willReturn(HealthStatus::READY);
         
         $clients = ['n1' => $c1, 'n2' => $c2];
         

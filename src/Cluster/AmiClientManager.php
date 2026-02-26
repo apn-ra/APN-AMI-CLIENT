@@ -9,8 +9,9 @@ use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
 use Apn\AmiClient\Core\EventFilter;
 use Apn\AmiClient\Core\EventQueue;
-use Apn\AmiClient\Correlation\ActionIdGenerator;
+use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
+use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Core\Logger;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
@@ -39,6 +40,9 @@ class AmiClientManager
 
     /** @var callable(AmiEvent): void[] */
     private array $anyEventListeners = [];
+
+    private int $connectAttemptsThisTick = 0;
+    private int $reconnectCursor = 0;
 
     public function __construct(
         private readonly ServerRegistry $registry = new ServerRegistry(),
@@ -156,6 +160,13 @@ class AmiClientManager
      */
     public function tickAll(int $timeoutMs = 0): void
     {
+        // 0. Reset budgets for all clients
+        foreach ($this->clients as $client) {
+            if ($client instanceof AmiClient) {
+                $client->resetTickBudgets();
+            }
+        }
+
         // 1. I/O Multiplexing via Reactor (Guideline 2)
         try {
             $this->reactor->tick($timeoutMs);
@@ -169,9 +180,23 @@ class AmiClientManager
         }
 
         // 2. Internal state processing for all clients
-        foreach ($this->clients as $key => $client) {
+        $this->connectAttemptsThisTick = 0;
+        $maxConnectAttempts = $this->options->maxConnectAttemptsPerTick;
+
+        $keys = array_keys($this->clients);
+        $count = count($keys);
+        $startCursor = $this->reconnectCursor;
+        for ($i = 0; $i < $count; $i++) {
+            $index = ($startCursor + $i) % $count;
+            $key = $keys[$index];
+            $client = $this->clients[$key];
             try {
-                $client->processTick();
+                $canConnect = $this->connectAttemptsThisTick < $maxConnectAttempts;
+                if ($client->processTick($canConnect)) {
+                    $this->connectAttemptsThisTick++;
+                    // Advance cursor on every attempted connect to prevent starvation.
+                    $this->reconnectCursor = ($index + 1) % $count;
+                }
             } catch (\Throwable $e) {
                 // Guideline 5: Node Isolation. Failure in one client must not block others.
                 $this->logger->error('Client processTick failure', [
@@ -213,13 +238,29 @@ class AmiClientManager
         $eventName = strtolower($event->getName());
         if (isset($this->eventListeners[$eventName])) {
             foreach ($this->eventListeners[$eventName] as $listener) {
-                $listener($event);
+                try {
+                    $listener($event);
+                } catch (\Throwable $e) {
+                    $this->logger->error('Manager event listener failed', [
+                        'server_key' => $event->serverKey,
+                        'event_name' => $event->getName(),
+                        'exception' => $e->getMessage(),
+                    ]);
+                }
             }
         }
 
         // 2. Catch-all listeners
         foreach ($this->anyEventListeners as $listener) {
-            $listener($event);
+            try {
+                $listener($event);
+            } catch (\Throwable $e) {
+                $this->logger->error('Manager any-event listener failed', [
+                    'server_key' => $event->serverKey,
+                    'event_name' => $event->getName(),
+                    'exception' => $e->getMessage(),
+                ]);
+            }
         }
     }
 
@@ -296,24 +337,49 @@ class AmiClientManager
             $config->host,
             $config->port,
             $options->connectTimeout,
-            $options->writeBufferLimit
+            $options->writeBufferLimit,
+            $options->maxBytesReadPerTick
         );
 
-        $correlation = new CorrelationRegistry($options->maxPendingActions);
+        $correlationRegistry = new CorrelationRegistry($options->maxPendingActions);
         $actionIdGenerator = new ActionIdGenerator($config->key);
+        $correlation = new CorrelationManager($actionIdGenerator, $correlationRegistry);
+
         $eventQueue = new EventQueue($options->eventQueueCapacity);
         $eventFilter = new EventFilter($options->allowedEvents, $options->blockedEvents);
+
+        $labels = [
+            'server_key' => $config->key,
+            'server_host' => $config->host,
+        ];
 
         $client = new AmiClient(
             serverKey: $config->key,
             transport: $transport,
             correlation: $correlation,
-            actionIdGenerator: $actionIdGenerator,
+            connectionManager: new \Apn\AmiClient\Health\ConnectionManager(
+                heartbeatInterval: $options->heartbeatInterval,
+                maxConnectAttemptsPerTick: $options->maxConnectAttemptsPerTick,
+                connectTimeout: (float) $options->connectTimeout,
+                readTimeout: (float) $options->readTimeout,
+                circuitFailureThreshold: $options->circuitFailureThreshold,
+                circuitCooldown: (float) $options->circuitCooldown,
+                circuitHalfOpenMaxProbes: $options->circuitHalfOpenMaxProbes,
+                logger: $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
+                labels: $labels,
+            ),
             eventQueue: $eventQueue,
             eventFilter: $eventFilter,
             logger: $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
             host: $config->host,
-            port: $config->port
+            port: $config->port,
+            maxFramesPerTick: $options->maxFramesPerTick,
+            maxEventsPerTick: $options->maxEventsPerTick,
+            maxConnectAttemptsPerTick: $options->maxConnectAttemptsPerTick,
+            readTimeout: (float) $options->readTimeout,
+            circuitFailureThreshold: $options->circuitFailureThreshold,
+            circuitCooldown: (float) $options->circuitCooldown,
+            circuitHalfOpenMaxProbes: $options->circuitHalfOpenMaxProbes
         );
 
         if ($options->memoryLimit > 0) {

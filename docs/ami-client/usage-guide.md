@@ -66,9 +66,17 @@ return [
     ],
 
     'options' => [
+        // Max wall-clock duration allowed in CONNECTING (non-blocking).
         'connect_timeout' => 10,
+        // Idle-read liveness threshold in seconds (non-blocking).
         'read_timeout' => 30,
         'heartbeat_interval' => 15,
+        // Circuit breaker: consecutive failure threshold before OPEN.
+        'circuit_failure_threshold' => 5,
+        // Circuit breaker: cooldown seconds before allowing probes.
+        'circuit_cooldown' => 30,
+        // Circuit breaker: max probe attempts while HALF_OPEN.
+        'circuit_half_open_max_probes' => 1,
         'max_pending_actions' => 5000,
         'event_queue_capacity' => 10000,
         'write_buffer_limit' => 5242880, // 5MB
@@ -263,6 +271,16 @@ Ami::onAnyEvent(function (AmiEvent $event) {
 
 For production, run a dedicated worker process for each server using the provided artisan command.
 
+### Recommended Dedicated `ami:listen` Pattern (Event Bridge)
+
+For dialer-grade stability in Laravel, use a single dedicated `ami:listen` process that maintains AMI connections and publishes events to a low-latency transport (Redis `PUBLISH` or a dedicated event bus). Other workers should consume from that transport instead of connecting directly to AMI.
+
+This pattern prevents connection explosions and keeps AMI I/O isolated in a single, long-lived process.
+
+### Warning: Connection Explosion in Laravel Topology
+
+Running `N` queue workers against `M` AMI nodes creates `N * M` connections. This can exhaust `manager.conf` limits and introduce high overhead. Use the Event Bridge pattern unless the process count is strictly bounded and the AMI handshake cost is acceptable.
+
 ### Artisan Command
 
 ```bash
@@ -287,7 +305,36 @@ stopwaitsecs=30
 
 The `ami:listen` command automatically handles `SIGTERM` and `SIGINT`, ensuring outbound buffers are flushed and connections are closed cleanly.
 
----
+### Redis Event Bridge Example (Configuration + Publisher)
+
+Use Redis pub/sub to fan out events from the dedicated listener to other workers. This example keeps AMI connections centralized.
+
+```env
+AMI_EVENT_BRIDGE=redis
+AMI_REDIS_CHANNEL=ami.events
+```
+
+```php
+use Apn\AmiClient\Events\AmiEvent;
+use Apn\AmiClient\Laravel\Ami;
+use Illuminate\Support\Facades\Redis;
+
+// In a bootstrapped service provider or the ami:listen command handler
+Ami::onAnyEvent(function (AmiEvent $event): void {
+    $payload = [
+        'server' => $event->getServerKey(),
+        'name' => $event->getName(),
+        'headers' => $event->getHeaders(),
+        'received_at' => $event->getReceivedAt(),
+    ];
+
+    Redis::publish(env('AMI_REDIS_CHANNEL', 'ami.events'), json_encode($payload));
+});
+```
+
+On the consumer side, subscribe to the channel and dispatch jobs or events as needed.
+
+--- 
 
 ## 10. Observability
 

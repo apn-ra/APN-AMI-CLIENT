@@ -33,23 +33,60 @@ class TcpTransportTest extends TestCase
         }
     }
 
+    private function awaitConnect(TcpTransport $transport)
+    {
+        $client = null;
+        for ($i = 0; $i < 20; $i++) {
+            $transport->tick(10);
+            if ($client === null) {
+                $client = @stream_socket_accept($this->server, 0);
+                if ($client) {
+                    stream_set_blocking($client, false);
+                }
+            }
+            if ($transport->isConnected() && $client !== null) {
+                return $client;
+            }
+            usleep(10000);
+        }
+
+        return $client;
+    }
+
     public function testConnectAndClose(): void
     {
         $transport = new TcpTransport($this->host, $this->port);
         $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
         $this->assertTrue($transport->isConnected());
 
         $transport->close();
         $this->assertFalse($transport->isConnected());
+
+        if ($client) {
+            fclose($client);
+        }
     }
 
     public function testConnectFails(): void
     {
         // Use a port that is unlikely to be open.
         $transport = new TcpTransport($this->host, 1);
-        
-        $this->expectException(ConnectionException::class);
-        $transport->open();
+
+        try {
+            $transport->open();
+        } catch (ConnectionException) {
+            $this->assertTrue(true);
+            return;
+        }
+
+        for ($i = 0; $i < 5; $i++) {
+            $transport->tick(10);
+            usleep(10000);
+        }
+
+        $this->assertFalse($transport->isConnected());
     }
 
     public function testSendAndReceive(): void
@@ -57,12 +94,7 @@ class TcpTransportTest extends TestCase
         $transport = new TcpTransport($this->host, $this->port);
         $transport->open();
 
-        $client = null;
-        for ($i = 0; $i < 10; $i++) {
-            $client = @stream_socket_accept($this->server, 0);
-            if ($client) break;
-            usleep(10000);
-        }
+        $client = $this->awaitConnect($transport);
         $this->assertNotNull($client);
 
         $receivedData = '';
@@ -91,18 +123,26 @@ class TcpTransportTest extends TestCase
         // Set a small buffer limit of 10 bytes
         $transport = new TcpTransport($this->host, $this->port, 30, 10);
         $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
 
         $transport->send("1234567890"); // OK
         $this->assertTrue($transport->isConnected());
 
         $this->expectException(BackpressureException::class);
         $transport->send("1"); // Should fail and drop connection
+
+        if ($client) {
+            fclose($client);
+        }
     }
 
     public function testDropConnectionOnOverflow(): void
     {
         $transport = new TcpTransport($this->host, $this->port, 30, 10);
         $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
 
         try {
             $transport->send("12345678901");
@@ -111,17 +151,27 @@ class TcpTransportTest extends TestCase
         }
 
         $this->assertFalse($transport->isConnected(), "Connection should be dropped on buffer overflow");
+
+        if ($client) {
+            fclose($client);
+        }
     }
 
     public function testTerminate(): void
     {
         $transport = new TcpTransport($this->host, $this->port);
         $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
         $transport->send("some data");
         $transport->terminate();
 
         $this->assertFalse($transport->isConnected());
         // Internal check: write buffer should be cleared too.
         $this->assertFalse($transport->hasPendingWrites());
+
+        if ($client) {
+            fclose($client);
+        }
     }
 }
