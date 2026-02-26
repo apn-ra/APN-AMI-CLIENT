@@ -284,7 +284,7 @@ The Core depends on `psr/log` only. If no logger is provided during construction
 To ensure observability in multi-server environments, all logs emitted by the Core SHOULD include:
 -   `server_key`: The identifier of the node.
 -   `action_id`: If the log relates to a specific action.
--   `queue_depth`: If the log relates to buffer/queue states.
+-   `queue_depth`: Always present in structured output (normalized to `null` when not queue-related).
 
 ### 12.3 Security & Redaction
 -   **Secrets:** `Secret`, `Password`, and sensitive AMI variables MUST be masked (e.g., `********`) before being passed to the logger.
@@ -333,7 +333,7 @@ The parser is responsible for turning raw stream bytes into structured AMI messa
 
 ### 15.1 Hardening Rules
 -   **Delimiters:** Handle both standard `\r\n\r\n` and defensive `\n\n` as frame boundaries.
--   **Max Frame Size:** Strict **64KB** limit per AMI frame. Frames exceeding this must be discarded.
+-   **Max Frame Size:** Configurable per-connection cap via `ClientOptions.max_frame_size` with a safe default of **1MB** and bounded range (**64KB..4MB**). Frames exceeding this cap must be discarded.
 -   **Max Parser Buffer:** The cumulative buffer for a single connection must have a hard cap (e.g., 2MB) to prevent OOM.
 -   **Desync Recovery:** If invalid protocol data is encountered:
     1.  Discard bytes until the next valid double-newline delimiter is found.
@@ -401,6 +401,7 @@ The following remediations are mandatory to satisfy 24/7 dialer-grade behavior a
     -   Log all state transitions with reason and counters.
 -   **`queue_depth` log standardization (P3) (Task: PR-P3-01):**
     -   Normalize `queue_depth` field usage across event/backpressure/reconnect related logs.
+    -   Enforce `queue_depth` presence (value or `null`) and include queue context in queue-related categories.
     -   Preserve compatibility with existing log structure while adding missing contexts.
 
 --- 
@@ -496,10 +497,10 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 
 4) Security: Expand/configure secret redaction (P2) â€” Tasks: `PR2-P2-02`, `PR2-P2-03`
 - Expand key list and add regex-based key matching (password/secret/token/auth/key/etc).
-- Allow redaction policy injection/config via `ClientOptions`.
+- Allow redaction policy injection/config via `ClientOptions` (`redaction_keys`, `redaction_key_patterns`) in addition to secure defaults.
 - Document tests and safe defaults.
 
 5) Correlation: Bound `ActionID` length (P2) â€” Tasks: `PR2-P2-04`, `PR2-P2-05`
 - Enforce max `ActionID` length (e.g., 96â€“128 chars).
-- If exceeded: truncate + stable hash suffix to preserve uniqueness.
+- If exceeded: truncate + stable hash suffix to preserve uniqueness (configured via `ClientOptions.max_action_id_length`).
 - Document uniqueness guarantees and logging expectations.

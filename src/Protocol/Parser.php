@@ -10,21 +10,24 @@ use Apn\AmiClient\Exceptions\ProtocolException;
 /**
  * Parses raw AMI stream bytes into Message objects.
  *
- * Implements AMI framing logic (\r\n\r\n) and 1MB max frame size enforcement.
+ * Implements AMI framing logic (\r\n\r\n) and configurable max frame size enforcement.
  * Includes key normalization (lowercase) and duplicate key handling as arrays.
  */
 class Parser
 {
+    private const int MIN_FRAME_SIZE = 65536; // 64KB
+    private const int DEFAULT_FRAME_SIZE = 1048576; // 1MB
+    private const int MAX_FRAME_SIZE = 4194304; // 4MB
+
     private string $buffer = '';
     private int $bufferCap = 2097152; // 2MB (Guideline 6, Phase 1)
+    private int $maxFrameSize = self::DEFAULT_FRAME_SIZE;
     private bool $bannerProcessed = false;
 
-    /** @var int 64KB hard limit for individual AMI frames (Guideline 6, Phase 1) */
-    private const int MAX_FRAME_SIZE = 65536;
-
-    public function __construct(int $bufferCap = 2097152)
+    public function __construct(int $bufferCap = 2097152, int $maxFrameSize = self::DEFAULT_FRAME_SIZE)
     {
         $this->bufferCap = $bufferCap;
+        $this->maxFrameSize = max(self::MIN_FRAME_SIZE, min(self::MAX_FRAME_SIZE, $maxFrameSize));
     }
 
     /**
@@ -52,8 +55,8 @@ class Parser
              throw new ParserDesyncException("Parser buffer exceeded safety limit (" . $this->bufferCap . " bytes)");
         }
 
-        // Defensive check: if we have more than MAX_FRAME_SIZE and no delimiter, something is wrong.
-        if (strlen($this->buffer) > self::MAX_FRAME_SIZE * 2) {
+        // Defensive check: if we have too much data and no delimiter, something is wrong.
+        if (strlen($this->buffer) > $this->maxFrameSize * 2) {
             if (!str_contains($this->buffer, "\r\n\r\n") && !str_contains($this->buffer, "\n\n")) {
                 $len = strlen($this->buffer);
                 $this->buffer = '';
@@ -106,9 +109,8 @@ class Parser
         $frame = substr($this->buffer, 0, $pos);
         $this->buffer = substr($this->buffer, $pos + $delimiterLen);
 
-        if (strlen($frame) > self::MAX_FRAME_SIZE) {
-            $this->recover();
-            throw new ProtocolException(sprintf("Frame size %d exceeded %d bytes limit", strlen($frame), self::MAX_FRAME_SIZE));
+        if (strlen($frame) > $this->maxFrameSize) {
+            throw new ProtocolException(sprintf("Frame size %d exceeded %d bytes limit", strlen($frame), $this->maxFrameSize));
         }
 
         return $this->parseFrame($frame);

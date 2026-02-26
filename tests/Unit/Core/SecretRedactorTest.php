@@ -21,6 +21,9 @@ class SecretRedactorTest extends TestCase
         $data = [
             'secret' => 'mysecret',
             'password' => 'mypass',
+            'token' => 'mytoken',
+            'auth' => 'Bearer value',
+            'key' => 'k-value',
             'variable' => 'sensitive=value',
             'safe' => 'safevalue',
         ];
@@ -28,6 +31,9 @@ class SecretRedactorTest extends TestCase
         $expected = [
             'secret' => '********',
             'password' => '********',
+            'token' => '********',
+            'auth' => '********',
+            'key' => '********',
             'variable' => '********',
             'safe' => 'safevalue',
         ];
@@ -69,5 +75,42 @@ class SecretRedactorTest extends TestCase
         ];
 
         $this->assertEquals($expected, $this->redactor->redact($data));
+    }
+
+    public function testDefaultRegexPolicyRedactsTokenAuthAndKeyPatterns(): void
+    {
+        $data = [
+            'api_token' => 'token-value',
+            'auth_header' => 'Bearer abc',
+            'private_key_path' => '/tmp/key.pem',
+            'x_auth_ctx' => 'authz',
+            'safe' => 'value',
+        ];
+
+        $redacted = $this->redactor->redact($data);
+
+        $this->assertSame('********', $redacted['api_token']);
+        $this->assertSame('********', $redacted['auth_header']);
+        $this->assertSame('********', $redacted['private_key_path']);
+        $this->assertSame('********', $redacted['x_auth_ctx']);
+        $this->assertSame('value', $redacted['safe']);
+    }
+
+    public function testAdditionalPolicyIsAppliedFromConstructor(): void
+    {
+        $redactor = new SecretRedactor(
+            additionalSensitiveKeys: ['custom_secret_field'],
+            additionalSensitiveKeyPatterns: ['/^x-.+$/i']
+        );
+
+        $redacted = $redactor->redact([
+            'custom_secret_field' => '1',
+            'x-auth-extra' => '2',
+            'normal' => '3',
+        ]);
+
+        $this->assertSame('********', $redacted['custom_secret_field']);
+        $this->assertSame('********', $redacted['x-auth-extra']);
+        $this->assertSame('3', $redacted['normal']);
     }
 }

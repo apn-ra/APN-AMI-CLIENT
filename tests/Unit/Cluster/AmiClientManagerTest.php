@@ -13,6 +13,7 @@ use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Transport\Reactor;
 use Psr\Log\NullLogger;
+use Psr\Log\LoggerInterface;
 use PHPUnit\Framework\TestCase;
 
 class AmiClientManagerTest extends TestCase
@@ -229,5 +230,33 @@ class AmiClientManagerTest extends TestCase
         // Since it's not lazy, the client should have been instantiated
         // We can't easily check without reflection, but we can verify it's there
         // by calling server() which should return the same instance that failed to open.
+    }
+
+    public function testDefaultLoggerUsesClientOptionsRedactionPolicy(): void
+    {
+        $options = new ClientOptions(
+            redactionKeys: ['custom_secret'],
+            redactionKeyPatterns: ['/^x-.+$/i']
+        );
+        $manager = new AmiClientManager(options: $options);
+
+        $reflection = new \ReflectionClass($manager);
+        $loggerProperty = $reflection->getProperty('logger');
+        /** @var LoggerInterface $logger */
+        $logger = $loggerProperty->getValue($manager);
+
+        ob_start();
+        $logger->warning('redaction-check', [
+            'custom_secret' => 'a',
+            'x-auth-header' => 'b',
+            'safe' => 'c',
+        ]);
+        $output = ob_get_clean();
+
+        $decoded = json_decode($output, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame('********', $decoded['custom_secret']);
+        $this->assertSame('********', $decoded['x-auth-header']);
+        $this->assertSame('c', $decoded['safe']);
     }
 }

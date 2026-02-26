@@ -13,7 +13,9 @@ use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Exceptions\AmiTimeoutException;
 use Apn\AmiClient\Exceptions\ConnectionLostException;
 use Apn\AmiClient\Exceptions\BackpressureException;
+use Apn\AmiClient\Exceptions\MissingResponseException;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
+use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
 use PHPUnit\Framework\TestCase;
 
 class CorrelationRegistryTest extends TestCase
@@ -226,6 +228,50 @@ class CorrelationRegistryTest extends TestCase
         $this->assertCount(10000, $events); // Capped at 10000
     }
 
+    public function test_it_fails_when_completion_event_arrives_without_response(): void
+    {
+        $registry = new CorrelationRegistry();
+        $strategy = new MultiEventStrategy('Complete');
+        $action = $this->createMockAction('id-missing-response', $strategy);
+        $pending = $registry->register($action);
+
+        $capturedException = null;
+        $pending->onComplete(function ($e) use (&$capturedException) {
+            $capturedException = $e;
+        });
+
+        $registry->handleEvent(new Event(['event' => 'Complete', 'actionid' => 'id-missing-response']));
+
+        $this->assertInstanceOf(MissingResponseException::class, $capturedException);
+        $this->assertSame(0, $registry->count());
+    }
+
+    public function test_it_allows_explicit_event_only_strategy_without_response(): void
+    {
+        $registry = new CorrelationRegistry();
+        $strategy = new EventOnlyMockStrategy('Done');
+        $action = $this->createMockAction('id-event-only', $strategy);
+        $pending = $registry->register($action);
+
+        $resolved = false;
+        $resolvedResponse = null;
+        $resolvedEvents = [];
+        $pending->onComplete(function ($e, $r, $ev) use (&$resolved, &$resolvedResponse, &$resolvedEvents) {
+            $this->assertNull($e);
+            $resolved = true;
+            $resolvedResponse = $r;
+            $resolvedEvents = $ev;
+        });
+
+        $registry->handleEvent(new Event(['event' => 'Done', 'actionid' => 'id-event-only']));
+
+        $this->assertTrue($resolved);
+        $this->assertInstanceOf(Response::class, $resolvedResponse);
+        $this->assertTrue($resolvedResponse->isSuccess());
+        $this->assertCount(1, $resolvedEvents);
+        $this->assertSame(0, $registry->count());
+    }
+
     public function test_register_throws_on_missing_action_id(): void
     {
         $registry = new CorrelationRegistry();
@@ -266,5 +312,49 @@ readonly class MockAction extends Action
     public function withActionId(string $actionId): static
     {
         return new self($actionId, $this->strategy);
+    }
+}
+
+final class EventOnlyMockStrategy implements EventOnlyCompletionStrategyInterface
+{
+    private bool $complete = false;
+
+    public function __construct(private readonly string $terminalEventName)
+    {
+    }
+
+    public function onResponse(Response $response): bool
+    {
+        return false;
+    }
+
+    public function onEvent(Event $event): bool
+    {
+        if (strcasecmp($event->getName(), $this->terminalEventName) === 0) {
+            $this->complete = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    public function isComplete(): bool
+    {
+        return $this->complete;
+    }
+
+    public function getMaxDurationMs(): int
+    {
+        return 30000;
+    }
+
+    public function getMaxMessages(): int
+    {
+        return 10;
+    }
+
+    public function getTerminalEventNames(): array
+    {
+        return [$this->terminalEventName];
     }
 }

@@ -141,22 +141,24 @@ class ParserTest extends TestCase
 
     public function test_it_enforces_max_frame_size(): void
     {
+        $parser = new Parser(maxFrameSize: 65536);
         $largeData = str_repeat("A", 70000) . "\r\n\r\n";
-        $this->parser->push($largeData);
+        $parser->push($largeData);
         
         $this->expectException(ProtocolException::class);
         $this->expectExceptionMessage("exceeded 65536 bytes limit");
         
-        $this->parser->next();
+        $parser->next();
     }
 
     public function test_it_recovers_from_desync_without_delimiter(): void
     {
+        $parser = new Parser(maxFrameSize: 65536);
         // Push too much data without delimiter (exceeding MAX_FRAME_SIZE * 2)
         $garbage = str_repeat("G", 150000);
         
         try {
-            $this->parser->push($garbage);
+            $parser->push($garbage);
         } catch (ParserDesyncException $e) {
             $this->assertTrue(
                 str_contains($e->getMessage(), "safety limit") || 
@@ -166,20 +168,21 @@ class ParserTest extends TestCase
         
         // Parser should be cleared, but let's test push after recovery
         $valid = "Response: Success\r\nActionID: recovery\r\n\r\n";
-        $this->parser->push($valid);
+        $parser->push($valid);
         
-        $message = $this->parser->next();
+        $message = $parser->next();
         $this->assertInstanceOf(Response::class, $message);
         $this->assertEquals('recovery', $message->getActionId());
     }
 
     public function test_it_recovers_from_desync_with_delimiter_at_end(): void
     {
+        $parser = new Parser(maxFrameSize: 65536);
         $garbage = str_repeat("G", 70000) . "\r\n\r\n";
         
         try {
-            $this->parser->push($garbage);
-            $this->parser->next();
+            $parser->push($garbage);
+            $parser->next();
             $this->fail("Should have thrown ProtocolException");
         } catch (ProtocolException $e) {
             $this->assertStringContainsString("exceeded", $e->getMessage());
@@ -187,9 +190,9 @@ class ParserTest extends TestCase
         
         // After recovery, pushing valid data
         $valid = "Response: Success\r\nActionID: recovery2\r\n\r\n";
-        $this->parser->push($valid);
+        $parser->push($valid);
         
-        $message = $this->parser->next();
+        $message = $parser->next();
         $this->assertInstanceOf(Response::class, $message);
         $this->assertEquals('recovery2', $message->getActionId());
     }
@@ -241,5 +244,38 @@ class ParserTest extends TestCase
         $this->assertEquals('123', $actionId[0]);
         $this->assertEquals('Output line 1', $actionId[1]);
         $this->assertEquals('Output line 2', $actionId[2]);
+    }
+
+    public function test_it_accepts_large_frame_under_configured_limit(): void
+    {
+        $parser = new Parser(maxFrameSize: 1048576);
+        $payload = str_repeat('A', 900000);
+        $parser->push("Response: Success\r\nActionID: large-ok\r\nPayload: {$payload}\r\n\r\n");
+
+        $message = $parser->next();
+        $this->assertInstanceOf(Response::class, $message);
+        $this->assertEquals('large-ok', $message->getActionId());
+        $this->assertSame($payload, $message->getHeader('payload'));
+    }
+
+    public function test_it_recovers_without_corrupting_next_frame_after_oversize_failure(): void
+    {
+        $parser = new Parser(maxFrameSize: 65536);
+        $oversize = "Response: Success\r\nActionID: too-large\r\nPayload: " . str_repeat('B', 70000) . "\r\n\r\n";
+        $valid = "Response: Success\r\nActionID: after-oversize\r\nMessage: intact\r\n\r\n";
+
+        $parser->push($oversize . $valid);
+
+        try {
+            $parser->next();
+            $this->fail('Expected ProtocolException for oversize frame');
+        } catch (ProtocolException $e) {
+            $this->assertStringContainsString('exceeded 65536 bytes limit', $e->getMessage());
+        } finally {
+            $message = $parser->next();
+            $this->assertInstanceOf(Response::class, $message);
+            $this->assertEquals('after-oversize', $message->getActionId());
+            $this->assertEquals('intact', $message->getMessageHeader());
+        }
     }
 }

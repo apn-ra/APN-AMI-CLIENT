@@ -644,6 +644,7 @@ class AmiClient implements AmiClientInterface
                         'server_key' => $this->serverKey,
                         'event_name' => $amiEvent->getName(),
                         'queue_depth' => $this->eventQueue->count(),
+                        'queue_type' => 'event_queue',
                         'dropped_total' => $this->eventQueue->getDroppedEventsCount(),
                     ]);
                 }

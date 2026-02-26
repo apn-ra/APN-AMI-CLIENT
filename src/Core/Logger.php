@@ -68,6 +68,10 @@ class Logger extends AbstractLogger
             $payload['action_id'] = null;
         }
 
+        if (!isset($payload['queue_depth'])) {
+            $payload['queue_depth'] = null;
+        }
+
         // Guideline 9: Secret Redaction
         $payload = $this->redactor->redact($payload);
 

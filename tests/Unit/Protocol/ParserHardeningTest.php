@@ -19,7 +19,7 @@ class ParserHardeningTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->parser = new Parser();
+        $this->parser = new Parser(maxFrameSize: 65536);
     }
 
     public function test_it_handles_newline_only_delimiter(): void

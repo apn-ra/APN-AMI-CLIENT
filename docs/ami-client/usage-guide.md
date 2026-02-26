@@ -70,6 +70,13 @@ return [
         'connect_timeout' => 10,
         // Idle-read liveness threshold in seconds (non-blocking).
         'read_timeout' => 30,
+        // Per-frame parser cap in bytes (bounded internally to 64KB..4MB).
+        'max_frame_size' => 1048576,
+        // Optional additions to default secret redaction key list/patterns.
+        'redaction_keys' => [],
+        'redaction_key_patterns' => [],
+        // Max ActionID length (bounded internally to 64..256).
+        'max_action_id_length' => 128,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,
@@ -343,6 +350,7 @@ On the consumer side, subscribe to the channel and dispatch jobs or events as ne
 The package emits JSON-formatted logs. Ensure your logger is configured to capture:
 - `server_key`
 - `action_id`
+- `queue_depth` (normalized to `null` for non-queue logs)
 - `worker_pid`
 
 ### Metrics

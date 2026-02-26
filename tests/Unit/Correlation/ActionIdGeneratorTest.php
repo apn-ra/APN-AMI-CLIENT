@@ -49,4 +49,31 @@ class ActionIdGeneratorTest extends TestCase
         
         $this->assertCount(1000, $ids);
     }
+
+    public function test_long_server_key_produces_bounded_action_id(): void
+    {
+        $longServerKey = str_repeat('node-segment-', 20);
+        $generator = new ActionIdGenerator($longServerKey, 'worker-instance', 96);
+
+        $id = $generator->next();
+        $this->assertLessThanOrEqual(96, strlen($id));
+        $this->assertCount(3, explode(':', $id));
+    }
+
+    public function test_bounded_action_ids_remain_unique_across_long_server_keys(): void
+    {
+        $serverA = str_repeat('server-a-', 24);
+        $serverB = str_repeat('server-b-', 24);
+        $instance = str_repeat('instance-', 12);
+
+        $genA = new ActionIdGenerator($serverA, $instance, 96);
+        $genB = new ActionIdGenerator($serverB, $instance, 96);
+
+        $idA = $genA->next();
+        $idB = $genB->next();
+
+        $this->assertLessThanOrEqual(96, strlen($idA));
+        $this->assertLessThanOrEqual(96, strlen($idB));
+        $this->assertNotSame($idA, $idB);
+    }
 }

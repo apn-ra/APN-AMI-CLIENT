@@ -13,8 +13,10 @@ use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Core\Logger;
+use Apn\AmiClient\Core\SecretRedactor;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
+use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Transport\Reactor;
 use Apn\AmiClient\Transport\TcpTransport;
 use Psr\Log\LoggerInterface;
@@ -51,7 +53,10 @@ class AmiClientManager
         ?Reactor $reactor = null
     ) {
         $this->reactor = $reactor ?? new Reactor();
-        $this->logger = $logger ?? new Logger();
+        $this->logger = $logger ?? new Logger(new SecretRedactor(
+            $this->options->redactionKeys,
+            $this->options->redactionKeyPatterns
+        ));
 
         if (!$this->options->lazy) {
             $this->connectAll();
@@ -342,11 +347,12 @@ class AmiClientManager
         );
 
         $correlationRegistry = new CorrelationRegistry($options->maxPendingActions);
-        $actionIdGenerator = new ActionIdGenerator($config->key);
+        $actionIdGenerator = new ActionIdGenerator($config->key, maxActionIdLength: $options->maxActionIdLength);
         $correlation = new CorrelationManager($actionIdGenerator, $correlationRegistry);
 
         $eventQueue = new EventQueue($options->eventQueueCapacity);
         $eventFilter = new EventFilter($options->allowedEvents, $options->blockedEvents);
+        $parser = new Parser(maxFrameSize: $options->maxFrameSize);
 
         $labels = [
             'server_key' => $config->key,
@@ -357,6 +363,7 @@ class AmiClientManager
             serverKey: $config->key,
             transport: $transport,
             correlation: $correlation,
+            parser: $parser,
             connectionManager: new \Apn\AmiClient\Health\ConnectionManager(
                 heartbeatInterval: $options->heartbeatInterval,
                 maxConnectAttemptsPerTick: $options->maxConnectAttemptsPerTick,

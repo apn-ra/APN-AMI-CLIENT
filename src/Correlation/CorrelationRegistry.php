@@ -7,6 +7,8 @@ namespace Apn\AmiClient\Correlation;
 use Apn\AmiClient\Exceptions\AmiTimeoutException;
 use Apn\AmiClient\Exceptions\ConnectionLostException;
 use Apn\AmiClient\Exceptions\BackpressureException;
+use Apn\AmiClient\Exceptions\MissingResponseException;
+use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
@@ -108,6 +110,20 @@ final class CorrelationRegistry
 
         if ($strategy->onEvent($event)) {
             $response = $this->responses[$actionId] ?? null;
+            if ($response === null) {
+                if (!$strategy instanceof EventOnlyCompletionStrategyInterface) {
+                    $this->fail(
+                        $actionId,
+                        new MissingResponseException(
+                            sprintf('ActionID %s completed without an AMI response', $actionId)
+                        )
+                    );
+                    return;
+                }
+
+                $response = new Response(['response' => 'Success', 'actionid' => $actionId]);
+            }
+
             $this->complete($actionId, $response);
         }
     }
@@ -145,15 +161,14 @@ final class CorrelationRegistry
     /**
      * Cleanly completes an action.
      */
-    private function complete(string $actionId, ?Response $response): void
+    private function complete(string $actionId, Response $response): void
     {
         $pending = $this->pending[$actionId];
         $events = $this->collectedEvents[$actionId] ?? [];
         
         $this->cleanup($actionId);
 
-        // Resolve with the provided response, or an empty success response if missing
-        $pending->resolve($response ?? new Response(['response' => 'Success', 'actionid' => $actionId]), $events);
+        $pending->resolve($response, $events);
     }
 
     /**

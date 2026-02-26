@@ -24,6 +24,7 @@ class LoggerTest extends TestCase
         $this->assertEquals('test message', $decoded['message']);
         $this->assertEquals('srv1', $decoded['server_key']);
         $this->assertEquals('123', $decoded['action_id']);
+        $this->assertNull($decoded['queue_depth']);
         $this->assertArrayHasKey('worker_pid', $decoded);
         $this->assertArrayHasKey('timestamp_ms', $decoded);
     }
@@ -63,5 +64,18 @@ class LoggerTest extends TestCase
         $decoded = json_decode($output, true);
         $this->assertEquals('unknown', $decoded['server_key']);
         $this->assertNull($decoded['action_id']);
+        $this->assertNull($decoded['queue_depth']);
+    }
+
+    public function testQueueDepthIsPreservedWhenProvided(): void
+    {
+        $logger = new Logger();
+
+        ob_start();
+        $logger->warning('queue-related', ['queue_depth' => 42]);
+        $output = ob_get_clean();
+
+        $decoded = json_decode($output, true);
+        $this->assertSame(42, $decoded['queue_depth']);
     }
 }

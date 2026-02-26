@@ -17,6 +17,7 @@ use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Protocol\Logoff;
+use Apn\AmiClient\Core\EventQueue;
 use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
@@ -334,6 +335,59 @@ class AmiClientTest extends TestCase
         $this->assertEquals('Action rejected due to backpressure', $record['message']);
         $this->assertArrayHasKey('queue_depth', $record['context']);
         $this->assertArrayHasKey('queue_type', $record['context']);
+    }
+
+    public function testEventDropLogIncludesNormalizedQueueFields(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public array $records = [];
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->records[] = [
+                    'level' => $level,
+                    'message' => (string) $message,
+                    'context' => $context,
+                ];
+            }
+        };
+
+        $transport = $this->createMock(TransportInterface::class);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $eventQueue = new EventQueue(1);
+        $parser = new Parser();
+        $onDataCallback = null;
+
+        $transport->method('onData')->willReturnCallback(function ($callback) use (&$onDataCallback) {
+            $onDataCallback = $callback;
+        });
+        $transport->method('isConnected')->willReturn(true);
+
+        $client = new AmiClient(
+            'node1',
+            $transport,
+            $correlation,
+            parser: $parser,
+            eventQueue: $eventQueue,
+            logger: $logger,
+            maxEventsPerTick: 0
+        );
+
+        $client->processTick();
+        $onDataCallback("Event: TestEvent\r\n\r\nEvent: TestEvent\r\n\r\n");
+        $client->processTick();
+
+        $record = null;
+        foreach ($logger->records as $candidate) {
+            if ($candidate['message'] === 'Event dropped due to queue capacity') {
+                $record = $candidate;
+                break;
+            }
+        }
+
+        $this->assertNotNull($record);
+        $this->assertArrayHasKey('queue_depth', $record['context']);
+        $this->assertArrayHasKey('queue_type', $record['context']);
+        $this->assertSame('event_queue', $record['context']['queue_type']);
     }
 
     public function testHealthReporting(): void

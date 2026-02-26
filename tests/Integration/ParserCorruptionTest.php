@@ -39,7 +39,7 @@ class ParserCorruptionTest extends TestCase
 
     public function test_it_recovers_from_missing_delimiter_via_safety_limit(): void
     {
-        $parser = new Parser();
+        $parser = new Parser(maxFrameSize: 65536);
         
         // Push garbage exceeding safety limit (MAX_FRAME_SIZE * 2)
         $limit = 65536;
@@ -62,7 +62,7 @@ class ParserCorruptionTest extends TestCase
 
     public function test_it_recovers_from_corrupted_frame_via_protocol_exception(): void
     {
-        $parser = new Parser();
+        $parser = new Parser(maxFrameSize: 65536);
         
         // A "frame" that is too large
         $largeFrame = str_repeat("K: V\r\n", 20000) . "\r\n\r\n"; // > 64KB
@@ -83,5 +83,26 @@ class ParserCorruptionTest extends TestCase
         $msg = $parser->next();
         $this->assertInstanceOf(Response::class, $msg);
         $this->assertEquals('recovery2', $msg->getActionId());
+    }
+
+    public function test_it_keeps_following_valid_frame_after_oversize_rejection(): void
+    {
+        $parser = new Parser(maxFrameSize: 65536);
+
+        $oversize = "Response: Success\r\nActionID: oversize\r\nPayload: " . str_repeat('X', 70000) . "\r\n\r\n";
+        $valid = "Response: Success\r\nActionID: still-there\r\nMessage: parser-recovered\r\n\r\n";
+        $parser->push($oversize . $valid);
+
+        try {
+            $parser->next();
+            $this->fail('Expected ProtocolException for oversize frame');
+        } catch (ProtocolException $e) {
+            $this->assertStringContainsString('exceeded', $e->getMessage());
+        }
+
+        $msg = $parser->next();
+        $this->assertInstanceOf(Response::class, $msg);
+        $this->assertEquals('still-there', $msg->getActionId());
+        $this->assertEquals('parser-recovered', $msg->getMessageHeader());
     }
 }
