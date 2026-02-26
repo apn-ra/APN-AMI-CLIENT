@@ -31,7 +31,7 @@ final class CallbackExceptionIsolationTest extends TestCase
                 $this->connected = true;
             }
 
-            public function close(): void
+            public function close(bool $graceful = true): void
             {
                 $this->connected = false;
             }
@@ -69,7 +69,7 @@ final class CallbackExceptionIsolationTest extends TestCase
 
             public function terminate(): void
             {
-                $this->close();
+                $this->close(false);
             }
         };
 
@@ -80,7 +80,15 @@ final class CallbackExceptionIsolationTest extends TestCase
             }
         };
 
-        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $output = [];
+        $fallbackLogger = new \Apn\AmiClient\Core\Logger(sinkWriter: function (string $line) use (&$output): int {
+            $output[] = $line;
+            return strlen($line);
+        });
+        $correlation = new CorrelationManager(
+            new ActionIdGenerator('node1'),
+            new CorrelationRegistry(logger: $fallbackLogger)
+        );
         $connectionManager = new ConnectionManager();
         $connectionManager->setStatus(HealthStatus::READY);
 
@@ -112,30 +120,14 @@ final class CallbackExceptionIsolationTest extends TestCase
         $firstActionId = $first->getAction()->getActionId();
         $secondActionId = $second->getAction()->getActionId();
 
-        $logFile = tempnam(sys_get_temp_dir(), 'ami-callback-handler-failure-');
-        $this->assertIsString($logFile);
-        $originalErrorLog = ini_get('error_log');
-        $originalLogErrors = ini_get('log_errors');
-        ini_set('log_errors', '1');
-        ini_set('error_log', $logFile);
+        $transport->receive(
+            "Response: Success\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Response: Success\r\nActionID: {$secondActionId}\r\n\r\n"
+        );
 
-        try {
-            $transport->receive(
-                "Response: Success\r\nActionID: {$firstActionId}\r\n\r\n" .
-                "Response: Success\r\nActionID: {$secondActionId}\r\n\r\n"
-            );
+        $client->processTick();
 
-            $client->processTick();
-        } finally {
-            ini_set('error_log', $originalErrorLog === false ? '' : (string) $originalErrorLog);
-            ini_set('log_errors', $originalLogErrors === false ? '1' : (string) $originalLogErrors);
-        }
-
-        $contents = file_get_contents($logFile);
-        if ($contents === false) {
-            $contents = '';
-        }
-        @unlink($logFile);
+        $contents = implode('', $output);
 
         $this->assertTrue($firstResolved);
         $this->assertTrue($secondResolved);

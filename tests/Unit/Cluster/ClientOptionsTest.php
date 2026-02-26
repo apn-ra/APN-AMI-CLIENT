@@ -17,12 +17,14 @@ final class ClientOptionsTest extends TestCase
             'redaction_key_patterns' => ['/^x-.+$/i'],
             'max_action_id_length' => 96,
             'enforce_ip_endpoints' => true,
+            'event_drop_log_interval_ms' => 750,
         ]);
 
         $this->assertSame(['custom_secret'], $options->redactionKeys);
         $this->assertSame(['/^x-.+$/i'], $options->redactionKeyPatterns);
         $this->assertSame(96, $options->maxActionIdLength);
         $this->assertTrue($options->enforceIpEndpoints);
+        $this->assertSame(750, $options->eventDropLogIntervalMs);
     }
 
     public function testInvalidRedactionPatternThrows(): void

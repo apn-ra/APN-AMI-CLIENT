@@ -77,7 +77,8 @@ final class CorrelationRegistry
         $pendingAction = new PendingAction(
             $action,
             microtime(true) + $timeoutSeconds,
-            $this->callbackExceptionHandler
+            $this->callbackExceptionHandler,
+            $this->logger
         );
         $this->pending[$actionId] = $pendingAction;
         $this->collectedEvents[$actionId] = [];

@@ -265,6 +265,7 @@ class ConnectionManager
     public function recordReadTimeout(): void
     {
         $this->setStatus(HealthStatus::DISCONNECTED);
+        $this->recordCircuitFailure('read_timeout');
         $this->reconnectAttempts++;
         $delay = $this->calculateBackoff();
         $this->nextReconnectTime = microtime(true) + $delay;

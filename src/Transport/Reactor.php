@@ -20,7 +20,10 @@ class Reactor
     private readonly LoggerInterface $logger;
     private readonly MetricsCollectorInterface $metrics;
 
-    public function __construct(?LoggerInterface $logger = null, ?MetricsCollectorInterface $metrics = null)
+    public function __construct(
+        ?LoggerInterface $logger = null,
+        ?MetricsCollectorInterface $metrics = null
+    )
     {
         $this->logger = $logger ?? new NullLogger();
         $this->metrics = $metrics ?? new NullMetricsCollector();
@@ -50,6 +53,8 @@ class Reactor
      */
     public function tick(int $timeoutMs = 0): void
     {
+        $timeoutMs = $this->normalizeTimeoutMs($timeoutMs);
+
         if (empty($this->transports)) {
             return;
         }
@@ -133,7 +138,7 @@ class Reactor
                 $this->logTransportError($key, 'stream_select', $error, [
                     'resource_state' => 'invalid',
                 ]);
-                $transport->close();
+                $transport->close(false);
                 continue;
             }
 
@@ -156,7 +161,7 @@ class Reactor
                 $this->logTransportError($key, 'stream_select', $probeError ?? $error, [
                     'resource_state' => 'invalid',
                 ]);
-                $transport->close();
+                $transport->close(false);
             }
         }
     }
@@ -211,5 +216,10 @@ class Reactor
             'server_key' => $serverKey,
             'operation' => $operation,
         ]);
+    }
+
+    private function normalizeTimeoutMs(int $timeoutMs): int
+    {
+        return 0;
     }
 }

@@ -7,8 +7,10 @@ namespace tests\Unit\Protocol;
 use Apn\AmiClient\Protocol\GenericAction;
 use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class GenericActionTest extends TestCase
 {
     public function test_it_correctly_builds_generic_action(): void

@@ -14,8 +14,10 @@ use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Protocol\Parser;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class FloodControlTest extends TestCase
 {
     public function test_event_queue_drops_oldest_when_full(): void

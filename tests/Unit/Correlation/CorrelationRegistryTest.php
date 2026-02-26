@@ -334,7 +334,12 @@ class CorrelationRegistryTest extends TestCase
 
     public function test_callback_exception_without_handler_emits_fallback_telemetry_and_continues(): void
     {
-        $registry = new CorrelationRegistry();
+        $output = [];
+        $logger = new \Apn\AmiClient\Core\Logger(sinkWriter: function (string $line) use (&$output): int {
+            $output[] = $line;
+            return strlen($line);
+        });
+        $registry = new CorrelationRegistry(logger: $logger);
         $action = $this->createMockAction('nodeA:1:1', new SingleResponseStrategy());
         $pending = $registry->register($action);
 
@@ -346,26 +351,8 @@ class CorrelationRegistryTest extends TestCase
             $completed = $e === null && $r?->isSuccess() === true;
         });
 
-        $logFile = tempnam(sys_get_temp_dir(), 'ami-callback-fallback-');
-        $this->assertIsString($logFile);
-        $originalErrorLog = ini_get('error_log');
-        $originalLogErrors = ini_get('log_errors');
-
-        ini_set('log_errors', '1');
-        ini_set('error_log', $logFile);
-
-        try {
-            $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'nodeA:1:1']));
-        } finally {
-            ini_set('error_log', $originalErrorLog === false ? '' : (string) $originalErrorLog);
-            ini_set('log_errors', $originalLogErrors === false ? '1' : (string) $originalLogErrors);
-        }
-
-        $contents = file_get_contents($logFile);
-        if ($contents === false) {
-            $contents = '';
-        }
-        @unlink($logFile);
+        $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'nodeA:1:1']));
+        $contents = implode('', $output);
 
         $this->assertTrue($completed);
         $this->assertStringContainsString('pending_action_callback_exception', $contents);

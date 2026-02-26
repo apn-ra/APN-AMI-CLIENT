@@ -13,9 +13,11 @@ use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Exceptions\ParserDesyncException;
 use Apn\AmiClient\Health\HealthStatus;
 use Apn\AmiClient\Protocol\Parser;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
+#[AllowMockObjectsWithoutExpectations]
 class Phase4IsolationValidationTest extends TestCase
 {
     public function test_parser_corruption_isolation(): void

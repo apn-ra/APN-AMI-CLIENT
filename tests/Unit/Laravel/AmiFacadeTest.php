@@ -8,8 +8,10 @@ use Apn\AmiClient\Cluster\AmiClientManager;
 use Apn\AmiClient\Laravel\Ami;
 use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Facade;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class AmiFacadeTest extends TestCase
 {
     protected Container $app;

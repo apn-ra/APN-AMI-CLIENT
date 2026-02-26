@@ -333,6 +333,36 @@ class TcpTransportTest extends TestCase
         }
     }
 
+    public function testNonGracefulCloseClearsWriteBufferOnce(): void
+    {
+        $transport = new class ($this->host, $this->port) extends TcpTransport {
+            public int $clearCalls = 0;
+
+            protected function clearWriteBuffer(): void
+            {
+                $this->clearCalls++;
+                parent::clearWriteBuffer();
+            }
+        };
+
+        $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
+
+        $transport->send("stale-action\r\n");
+        $this->assertGreaterThan(0, $transport->getPendingWriteBytes());
+
+        $transport->close(false);
+
+        $this->assertSame(1, $transport->clearCalls);
+        $this->assertSame(0, $transport->getPendingWriteBytes());
+        $this->assertFalse($transport->isConnected());
+
+        if ($client) {
+            fclose($client);
+        }
+    }
+
     public function testReadFailureLogsErrorDetailsAndIncrementsMetrics(): void
     {
         $logger = new class extends AbstractLogger {

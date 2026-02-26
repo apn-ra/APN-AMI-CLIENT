@@ -12,9 +12,15 @@ final class LoggerRedactionTest extends TestCase
 {
     public function test_logger_redacts_default_sensitive_key_list_fields(): void
     {
-        $logger = new Logger(new SecretRedactor());
+        $output = [];
+        $logger = new Logger(
+            redactor: new SecretRedactor(),
+            sinkWriter: function (string $line) use (&$output): int {
+                $output[] = $line;
+                return strlen($line);
+            }
+        );
 
-        ob_start();
         $logger->warning('redaction', [
             'password' => 'p',
             'token' => 't',
@@ -22,9 +28,8 @@ final class LoggerRedactionTest extends TestCase
             'key' => 'k',
             'safe' => 'ok',
         ]);
-        $output = ob_get_clean();
 
-        $decoded = json_decode((string) $output, true);
+        $decoded = json_decode($output[0] ?? '', true);
         $this->assertIsArray($decoded);
         $this->assertSame('********', $decoded['password']);
         $this->assertSame('********', $decoded['token']);
@@ -35,18 +40,23 @@ final class LoggerRedactionTest extends TestCase
 
     public function test_logger_redacts_regex_matched_fields(): void
     {
-        $logger = new Logger(new SecretRedactor());
+        $output = [];
+        $logger = new Logger(
+            redactor: new SecretRedactor(),
+            sinkWriter: function (string $line) use (&$output): int {
+                $output[] = $line;
+                return strlen($line);
+            }
+        );
 
-        ob_start();
         $logger->warning('redaction', [
             'api_token' => 'token-1',
             'auth_header' => 'Bearer xyz',
             'private_key_path' => '/tmp/key.pem',
             'normal' => 'keep',
         ]);
-        $output = ob_get_clean();
 
-        $decoded = json_decode((string) $output, true);
+        $decoded = json_decode($output[0] ?? '', true);
         $this->assertIsArray($decoded);
         $this->assertSame('********', $decoded['api_token']);
         $this->assertSame('********', $decoded['auth_header']);
@@ -56,17 +66,22 @@ final class LoggerRedactionTest extends TestCase
 
     public function test_logger_redacts_value_based_patterns(): void
     {
-        $logger = new Logger(new SecretRedactor());
+        $output = [];
+        $logger = new Logger(
+            redactor: new SecretRedactor(),
+            sinkWriter: function (string $line) use (&$output): int {
+                $output[] = $line;
+                return strlen($line);
+            }
+        );
 
-        ob_start();
         $logger->warning('redaction', [
             'note' => 'token=abc123; user=me',
             'header' => 'Authorization: Bearer abc.def.ghi',
             'safe' => 'ok',
         ]);
-        $output = ob_get_clean();
 
-        $decoded = json_decode((string) $output, true);
+        $decoded = json_decode($output[0] ?? '', true);
         $this->assertIsArray($decoded);
         $this->assertSame('********; user=me', $decoded['note']);
         $this->assertSame('Authorization: ********', $decoded['header']);

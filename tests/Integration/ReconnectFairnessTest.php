@@ -36,7 +36,7 @@ class ReconnectFairnessTest extends TestCase
                     $this->attempts[$this->key]++;
                     throw new \RuntimeException('connect failed');
                 }
-                public function close(): void {}
+                public function close(bool $graceful = true): void {}
                 public function send(string $data): void {}
                 public function tick(int $timeoutMs = 0): void {}
                 public function onData(callable $callback): void {}

@@ -11,8 +11,10 @@ use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Events\AmiEvent;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class MultiServerIsolationTest extends TestCase
 {
     public function test_event_isolation_between_servers(): void

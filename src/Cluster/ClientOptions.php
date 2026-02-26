@@ -34,6 +34,7 @@ readonly class ClientOptions
         public int $memoryLimit = 0,
         public int $maxFramesPerTick = 1000,
         public int $maxEventsPerTick = 1000,
+        public int $eventDropLogIntervalMs = 1000,
         public int $maxBytesReadPerTick = 1048576, // 1MB
         public int $maxFrameSize = 1048576, // 1MB
         public int $maxActionIdLength = 128,
@@ -65,6 +66,7 @@ readonly class ClientOptions
             memoryLimit: $options['memory_limit'] ?? 0,
             maxFramesPerTick: $options['max_frames_per_tick'] ?? 1000,
             maxEventsPerTick: $options['max_events_per_tick'] ?? 1000,
+            eventDropLogIntervalMs: $options['event_drop_log_interval_ms'] ?? 1000,
             maxBytesReadPerTick: $options['max_bytes_read_per_tick'] ?? 1048576,
             maxFrameSize: $options['max_frame_size'] ?? 1048576,
             maxActionIdLength: $options['max_action_id_length'] ?? 128,

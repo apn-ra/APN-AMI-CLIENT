@@ -18,9 +18,11 @@ interface TransportInterface
     public function open(): void;
 
     /**
-     * Close the connection gracefully.
+     * Close the connection.
+     *
+     * @param bool $graceful When false, pending outbound bytes are purged to prevent cross-session replay.
      */
-    public function close(): void;
+    public function close(bool $graceful = true): void;
 
     /**
      * Queue raw data for transmission.

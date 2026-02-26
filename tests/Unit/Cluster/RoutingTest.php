@@ -10,8 +10,10 @@ use Apn\AmiClient\Cluster\Routing\RoundRobinRoutingStrategy;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
 use Apn\AmiClient\Exceptions\AmiException;
 use Apn\AmiClient\Health\HealthStatus;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class RoutingTest extends TestCase
 {
     public function testRoundRobin(): void

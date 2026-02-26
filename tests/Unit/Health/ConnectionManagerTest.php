@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Health;
 
 use Apn\AmiClient\Health\ConnectionManager;
+use Apn\AmiClient\Health\CircuitState;
 use Apn\AmiClient\Health\HealthStatus;
 use PHPUnit\Framework\TestCase;
 
@@ -53,7 +54,11 @@ class ConnectionManagerTest extends TestCase
 
     public function testReadTimeout(): void
     {
-        $manager = new ConnectionManager(readTimeout: 0.001);
+        $manager = new ConnectionManager(
+            readTimeout: 0.001,
+            circuitFailureThreshold: 1,
+            circuitCooldown: 30.0
+        );
         $manager->setStatus(HealthStatus::READY);
 
         usleep(2000);
@@ -61,6 +66,7 @@ class ConnectionManagerTest extends TestCase
         $this->assertTrue($manager->isReadTimedOut());
         $manager->recordReadTimeout();
         $this->assertEquals(HealthStatus::DISCONNECTED, $manager->getStatus());
+        $this->assertEquals(CircuitState::OPEN, $manager->getCircuitState());
     }
 
     public function testCircuitBreakerBlocksReconnect(): void

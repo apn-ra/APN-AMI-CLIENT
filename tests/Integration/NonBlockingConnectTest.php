@@ -110,7 +110,7 @@ class NonBlockingConnectTest extends TestCase
         $stuckTransport = new class implements TransportInterface {
             public bool $opened = false;
             public function open(): void { $this->opened = true; }
-            public function close(): void {}
+            public function close(bool $graceful = true): void {}
             public function send(string $data): void {}
             public function tick(int $timeoutMs = 0): void {}
             public function onData(callable $callback): void {}
@@ -266,6 +266,70 @@ class NonBlockingConnectTest extends TestCase
 
         $this->assertStringContainsString('Action: Ping', $read);
         $this->assertTrue($receivedEvent);
+        $this->assertEquals(HealthStatus::CONNECTING, $hostnameClient->getHealthStatus());
+
+        fclose($conn);
+    }
+
+    public function test_tick_all_clamps_non_zero_timeout_in_production_non_blocking_mode(): void
+    {
+        $registry = new ServerRegistry();
+        $registry->add(new ServerConfig(
+            key: 'good',
+            host: $this->host,
+            port: $this->port
+        ));
+        $registry->add(new ServerConfig(
+            key: 'hosted',
+            host: 'example.test',
+            port: 5038
+        ));
+
+        DnsTestHook::setResolved('example.test', '203.0.113.1');
+
+        $options = new ClientOptions(
+            enforceIpEndpoints: false,
+            connectTimeout: 1,
+            readTimeout: 1,
+            maxConnectAttemptsPerTick: 1
+        );
+
+        $manager = new AmiClientManager(
+            $registry,
+            $options,
+            reactor: new Reactor(),
+            hostnameResolver: static fn (string $host): string => DnsTestHook::resolve($host)
+        );
+
+        DnsTestHook::forbid();
+
+        $goodClient = $manager->server('good');
+        $hostnameClient = $manager->server('hosted');
+
+        $goodClient->open();
+        $hostnameClient->open();
+
+        $conn = null;
+        for ($i = 0; $i < 20; $i++) {
+            $start = microtime(true);
+            $manager->tickAll(500);
+            $elapsedMs = (microtime(true) - $start) * 1000;
+            $this->assertLessThan(50.0, $elapsedMs, 'tickAll must clamp caller timeout to non-blocking in production mode.');
+
+            if ($conn === null) {
+                $conn = @stream_socket_accept($this->server, 0);
+                if ($conn) {
+                    stream_set_blocking($conn, false);
+                }
+            }
+            if ($conn !== null && $goodClient->isConnected()) {
+                break;
+            }
+            usleep(10000);
+        }
+
+        $this->assertNotNull($conn, 'Failed to connect good client');
+        $this->assertTrue($goodClient->isConnected());
         $this->assertEquals(HealthStatus::CONNECTING, $hostnameClient->getHealthStatus());
 
         fclose($conn);

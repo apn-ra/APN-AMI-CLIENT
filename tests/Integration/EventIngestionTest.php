@@ -11,8 +11,10 @@ use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Core\EventQueue;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class EventIngestionTest extends TestCase
 {
     public function test_it_ingests_and_delivers_events_from_transport(): void

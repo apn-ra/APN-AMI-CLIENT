@@ -75,7 +75,7 @@ class TransportSelectorFailureTest extends TestCase
                 $this->openCalled = true;
             }
 
-            public function close(): void
+            public function close(bool $graceful = true): void
             {
                 $this->closeCalled = true;
                 $this->connected = false;

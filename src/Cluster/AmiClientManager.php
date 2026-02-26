@@ -88,7 +88,10 @@ class AmiClientManager
         }
 
         $this->logger = $logger ?? new Logger($redactor);
-        $this->reactor = $reactor ?? new Reactor($this->logger, $this->metrics);
+        $this->reactor = $reactor ?? new Reactor(
+            $this->logger,
+            $this->metrics
+        );
 
         foreach ($this->registry->all() as $config) {
             $options = $config->options ?? $this->options;
@@ -194,7 +197,8 @@ class AmiClientManager
      */
     public function tick(string $serverKey, int $timeoutMs = 0): void
     {
-        $this->server($serverKey)->tick($timeoutMs);
+        $effectiveTimeoutMs = $this->normalizeRuntimeTimeoutMs($timeoutMs);
+        $this->server($serverKey)->tick($effectiveTimeoutMs);
     }
 
     /**
@@ -211,6 +215,8 @@ class AmiClientManager
      */
     public function tickAll(int $timeoutMs = 0): void
     {
+        $effectiveTimeoutMs = $this->normalizeRuntimeTimeoutMs($timeoutMs);
+
         // 0. Reset budgets for all clients
         foreach ($this->clients as $client) {
             if ($client instanceof AmiClient) {
@@ -220,7 +226,7 @@ class AmiClientManager
 
         // 1. I/O Multiplexing via Reactor (Guideline 2)
         try {
-            $this->reactor->tick($timeoutMs);
+            $this->reactor->tick($effectiveTimeoutMs);
         } catch (\Throwable $e) {
             // Guideline 5: Node Isolation. A failure in one node (or the reactor) 
             // should not impact others if possible. But reactor failure is critical.
@@ -264,6 +270,18 @@ class AmiClientManager
     public function pollAll(): void
     {
         $this->tickAll(0);
+    }
+
+    private function normalizeRuntimeTimeoutMs(int $timeoutMs): int
+    {
+        $normalized = max(0, $timeoutMs);
+        if ($normalized > 0) {
+            $this->metrics->increment('ami_runtime_timeout_clamped_total', [
+                'mode' => 'non_blocking',
+            ]);
+        }
+
+        return 0;
     }
 
     /**
@@ -450,6 +468,7 @@ class AmiClientManager
             port: $config->port,
             maxFramesPerTick: $options->maxFramesPerTick,
             maxEventsPerTick: $options->maxEventsPerTick,
+            eventDropLogIntervalMs: $options->eventDropLogIntervalMs,
             maxConnectAttemptsPerTick: $options->maxConnectAttemptsPerTick,
             readTimeout: (float) $options->readTimeout,
             circuitFailureThreshold: $options->circuitFailureThreshold,

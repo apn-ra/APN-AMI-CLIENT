@@ -7,6 +7,8 @@ namespace Apn\AmiClient\Correlation;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 /**
@@ -23,16 +25,19 @@ final class PendingAction
     private array $callbacks = [];
     /** @var callable(string, Throwable, Action): void|null */
     private $callbackExceptionHandler = null;
+    private LoggerInterface $logger;
 
     private readonly float $createdAt;
 
     public function __construct(
         private readonly Action $action,
         private readonly float $timeoutAt,
-        ?callable $callbackExceptionHandler = null
+        ?callable $callbackExceptionHandler = null,
+        ?LoggerInterface $logger = null
     ) {
         $this->createdAt = microtime(true);
         $this->callbackExceptionHandler = $callbackExceptionHandler;
+        $this->logger = $logger ?? new NullLogger();
     }
 
     /**
@@ -161,10 +166,9 @@ final class PendingAction
         ];
 
         try {
-            $encoded = json_encode($payload, JSON_THROW_ON_ERROR);
-            error_log($encoded === false ? '{"type":"pending_action_callback_exception"}' : $encoded);
+            $this->logger->warning('Pending action callback exception', $payload);
         } catch (Throwable) {
-            error_log('{"type":"pending_action_callback_exception"}');
+            // Never allow fallback telemetry failures to escape.
         }
     }
 

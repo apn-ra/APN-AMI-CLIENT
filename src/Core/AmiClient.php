@@ -59,6 +59,10 @@ class AmiClient implements AmiClientInterface
 
     private string $host = 'unknown';
     private int $port = 0;
+    private int $lastDroppedEventLogTotal = 0;
+    private float $lastDroppedEventLogAt = 0.0;
+    /** @var callable(): float */
+    private $clock;
 
     public function __construct(
         private readonly string $serverKey,
@@ -79,10 +83,14 @@ class AmiClient implements AmiClientInterface
         private int $circuitFailureThreshold = 5,
         private float $circuitCooldown = 30.0,
         private int $circuitHalfOpenMaxProbes = 1,
+        private int $eventDropLogIntervalMs = 1000,
+        ?callable $clock = null,
     ) {
         $this->host = $host;
         $this->port = $port;
         $this->metrics = $metrics ?? new NullMetricsCollector();
+        $this->eventDropLogIntervalMs = max(1, $eventDropLogIntervalMs);
+        $this->clock = $clock ?? static fn (): float => microtime(true);
         
         if ($logger === null) {
             $this->logger = (new Logger())->withServerKey($serverKey);
@@ -166,7 +174,7 @@ class AmiClient implements AmiClientInterface
         $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
 
         if (!$this->transport->isConnected()) {
-            $this->finalizeShutdown('Client closed');
+            $this->finalizeShutdown('Client closed', false);
             return;
         }
 
@@ -360,6 +368,8 @@ class AmiClient implements AmiClientInterface
             return false;
         }
 
+        $this->maybeLogEventDropSummary();
+
         // 2. Correlation Timeout Sweeps (Guideline 2 & 4)
         $this->correlation->sweep();
 
@@ -395,7 +405,7 @@ class AmiClient implements AmiClientInterface
                     'queue_depth' => $this->eventQueue->count(),
                     'queue_type' => 'event_queue',
                 ]);
-                $this->transport->close();
+                $this->transport->close(false);
                 $this->connectionManager->recordConnectTimeout();
                 return false;
             }
@@ -703,21 +713,35 @@ class AmiClient implements AmiClientInterface
 
             // Filter and queue event (Task 6.1, 6.3)
             if ($this->eventFilter->shouldKeep($amiEvent)) {
-                $beforeDroppedCount = $this->eventQueue->getDroppedEventsCount();
-                
                 $this->eventQueue->push($amiEvent);
-
-                if ($this->eventQueue->getDroppedEventsCount() > $beforeDroppedCount) {
-                    $this->logger->warning('Event dropped due to queue capacity', [
-                        'server_key' => $this->serverKey,
-                        'event_name' => $amiEvent->getName(),
-                        'queue_depth' => $this->eventQueue->count(),
-                        'queue_type' => 'event_queue',
-                        'dropped_total' => $this->eventQueue->getDroppedEventsCount(),
-                    ]);
-                }
             }
         }
+    }
+
+    private function maybeLogEventDropSummary(): void
+    {
+        $droppedTotal = $this->eventQueue->getDroppedEventsCount();
+        if ($droppedTotal <= $this->lastDroppedEventLogTotal) {
+            return;
+        }
+
+        $now = ($this->clock)();
+        $elapsedMs = (int) (($now - $this->lastDroppedEventLogAt) * 1000);
+        if ($this->lastDroppedEventLogAt > 0.0 && $elapsedMs < $this->eventDropLogIntervalMs) {
+            return;
+        }
+
+        $droppedDelta = $droppedTotal - $this->lastDroppedEventLogTotal;
+        $this->lastDroppedEventLogTotal = $droppedTotal;
+        $this->lastDroppedEventLogAt = $now;
+
+        $this->logger->warning('Event drops summary due to queue capacity', [
+            'server_key' => $this->serverKey,
+            'dropped_delta' => $droppedDelta,
+            'dropped_total' => $droppedTotal,
+            'queue_depth' => $this->eventQueue->count(),
+            'queue_type' => 'event_queue',
+        ]);
     }
 
     /**
@@ -779,13 +803,14 @@ class AmiClient implements AmiClientInterface
         $pendingBytes = $this->transport->getPendingWriteBytes();
 
         if (!$this->transport->isConnected() || $pendingBytes === 0 || $deadlineReached) {
-            $this->finalizeShutdown('Client closed');
+            $graceful = $this->transport->isConnected() && $pendingBytes === 0;
+            $this->finalizeShutdown('Client closed', $graceful);
         }
     }
 
-    private function finalizeShutdown(string $reason): void
+    private function finalizeShutdown(string $reason, bool $graceful): void
     {
-        $this->transport->close();
+        $this->transport->close($graceful);
         $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
         $this->parser->reset();
         $this->correlation->failAll($reason);
@@ -799,7 +824,7 @@ class AmiClient implements AmiClientInterface
         $this->shutdownRequested = false;
         $this->shutdownLogoffQueued = false;
         $this->shutdownDeadline = null;
-        $this->transport->close();
+        $this->transport->close(false);
         $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
         $this->parser->reset();
         $this->correlation->failAll($reason);

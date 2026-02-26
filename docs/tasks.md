@@ -340,7 +340,7 @@ None.
 ## Append: BATCH-PR-20260226-07
 
 ### Phase P0 (Blockers)
-- [ ] PR7-P0-01 (BATCH-PR-20260226-07) Enforce session-boundary write-buffer purge on non-graceful close
+- [x] PR7-P0-01 (BATCH-PR-20260226-07) Enforce session-boundary write-buffer purge on non-graceful close
 Severity: P0
 Target files/classes: `src/Transport/TcpTransport.php`, `src/Transport/WriteBuffer.php`, `src/Core/AmiClient.php`
 Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P0 - Stale outbound bytes can leak across reconnect session boundaries
@@ -356,7 +356,7 @@ Invariants that must remain true:
 - No cross-session action replay after reconnect.
 
 ### Phase P1 (High)
-- [ ] PR7-P1-01 (BATCH-PR-20260226-07) Replace synchronous tick-path stdout logging with bounded non-blocking sink
+- [x] PR7-P1-01 (BATCH-PR-20260226-07) Replace synchronous tick-path stdout logging with bounded non-blocking sink
 Severity: P1
 Target files/classes: `src/Core/Logger.php`, `src/Core/AmiClient.php`, `src/Core/Contracts/MetricsCollectorInterface.php`
 Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Tick-path logging must not perform synchronous stdout I/O
@@ -371,7 +371,7 @@ Invariants that must remain true:
 - Tick loop remains non-blocking under logging backpressure.
 - Listener exceptions cannot break dispatch loops.
 
-- [ ] PR7-P1-02 (BATCH-PR-20260226-07) Add event-drop log coalescing and interval rate limit
+- [x] PR7-P1-02 (BATCH-PR-20260226-07) Add event-drop log coalescing and interval rate limit
 Severity: P1
 Target files/classes: `src/Core/AmiClient.php`, `src/Core/EventQueue.php`, `src/Core/ClientOptions.php`
 Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Per-drop warning logs create amplification storms under queue pressure
@@ -386,7 +386,7 @@ Invariants that must remain true:
 - Queue drops remain observable.
 - Drop logging cannot dominate tick time under burst load.
 
-- [ ] PR7-P1-03 (BATCH-PR-20260226-07) Eliminate busy-spin in Laravel `ami:listen` runtime loop
+- [x] PR7-P1-03 (BATCH-PR-20260226-07) Eliminate busy-spin in Laravel `ami:listen` runtime loop
 Severity: P1
 Target files/classes: `src/Laravel/Commands/ListenCommand.php`, `config/ami-client.php`, `tests/Integration/*`
 Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P1 - Laravel listener loop busy-spins without blocking/yield
@@ -402,7 +402,7 @@ Invariants that must remain true:
 - Runtime loop behavior is deterministic and bounded.
 
 ### Phase P2 (Medium)
-- [ ] PR7-P2-01 (BATCH-PR-20260226-07) Enforce explicit non-blocking timeout semantics at runtime API boundary
+- [x] PR7-P2-01 (BATCH-PR-20260226-07) Enforce explicit non-blocking timeout semantics at runtime API boundary
 Severity: P2
 Target files/classes: `src/Cluster/AmiClientManager.php`, `src/Transport/Reactor.php`, `src/Transport/TcpTransport.php`, `src/Core/ClientOptions.php`
 Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-07) -> P2 - Non-blocking runtime contract is not enforced at API boundary
@@ -419,3 +419,158 @@ Invariants that must remain true:
 
 ### Phase P3 (Low)
 None.
+
+## Append: BATCH-PR-20260226-08
+
+### Phase P0 (Blockers)
+None.
+
+### Phase P1 (High)
+- [x] PR8-P1-01 (BATCH-PR-20260226-08) Enforce always-non-blocking runtime timeouts
+Severity: P1
+Target files/classes: `src/Cluster/AmiClientManager.php`, `src/Transport/Reactor.php`, `src/Transport/TcpTransport.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-08) -> P1 - Tick loop non-blocking invariant is not enforced
+Acceptance criteria:
+- Production runtime paths clamp or reject any non-zero timeout inputs and always return `0` for runtime select timeouts.
+- Blocking opt-out flags are removed from production paths or isolated into explicit dev/test-only components.
+- Non-blocking behavior is documented and enforced consistently across manager/reactor/transport.
+Required tests to add:
+- PHPUnit unit test: non-blocking invariant fails if any production `normalizeTimeoutMs()` or equivalent returns non-zero. Run with `vendor/bin/phpunit`.
+- PHPUnit integration test: tick loop remains non-blocking across multiple nodes even when caller passes non-zero timeout. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop is fully non-blocking in production runtime paths.
+- Multi-server fairness under per-tick budgets remains intact.
+
+### Phase P2 (Medium)
+- [x] PR8-P2-01 (BATCH-PR-20260226-08) Record read-timeout failures in circuit breaker
+Severity: P2
+Target files/classes: `src/Health/ConnectionManager.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-08) -> P2 - Read-timeout failures are not recorded in circuit breaker
+Acceptance criteria:
+- `recordReadTimeout()` records `recordCircuitFailure('read_timeout')` before scheduling reconnect.
+- Circuit-breaker transition logging/metrics are consistent with connect/auth failure paths.
+Required tests to add:
+- PHPUnit unit test: repeated read timeouts transition circuit breaker to open/half-open per policy. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Reconnect storms cannot monopolize tick time.
+
+- [x] PR8-P2-02 (BATCH-PR-20260226-08) Emit structured, throttled warnings on logger sink drops
+Severity: P2
+Target files/classes: `src/Core/Logger.php`, `src/Core/AmiClient.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-08) -> P2 - Logger sink drops lack structured warning logs
+Acceptance criteria:
+- Sink drop reasons (`capacity_exceeded`, `sink_exception`, `sink_write_failed`) emit structured warnings with `server_key`, `queue_depth`, and reason.
+- Drop counters continue to increment deterministically for each drop condition.
+- Warning logs are throttled to avoid log amplification storms.
+Required tests to add:
+- PHPUnit unit test: sink drop increments counter and emits one throttled warning with required fields. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: metrics/logging wiring remains intact when sink throws (logger remains non-throwing). Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Logger sink drops are observable (logged and counted).
+- Logger must never throw and must not block tick progression.
+
+### Phase P3 (Low)
+- [x] PR8-P3-01 (BATCH-PR-20260226-08) Replace logger sink queue with O(1) dequeue structure
+Severity: P3
+Target files/classes: `src/Core/Logger.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-08) -> P3 - Logger sink queue uses O(n) dequeue
+Acceptance criteria:
+- Sink queue uses `SplQueue` (or equivalent) to avoid O(n) dequeue reindexing.
+- Queue order is preserved under sustained logging.
+Required tests to add:
+- PHPUnit unit test: queued log entries preserve FIFO order after multiple enqueues/dequeues. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Logger sink queue remains bounded.
+
+- [x] PR8-P3-02 (BATCH-PR-20260226-08) Route PendingAction fallback telemetry through PSR-3 logger
+Severity: P3
+Target files/classes: `src/Correlation/PendingAction.php`, `src/Correlation/CorrelationRegistry.php`
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-08) -> P3 - PendingAction fallback telemetry bypasses PSR-3 logger
+Acceptance criteria:
+- Fallback exception telemetry uses PSR-3 logger path instead of `error_log`.
+- Structured context is preserved and redaction policies remain intact.
+Required tests to add:
+- PHPUnit unit test: callback exception with missing handler emits PSR-3 log entry with required context. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Listener exceptions cannot break dispatch loops.
+
+## Append: BATCH-PR-20260226-09
+
+### Phase P0 (Blockers)
+None.
+
+### Phase P1 (High)
+- [ ] PR9-P1-01 (BATCH-PR-20260226-09) Implement bounded worker cadence for `ami:listen` loop
+Severity: P1
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-09) -> P1 - Worker cadence controls are effectively disabled (hot-spin risk)
+Target files/classes: `src/Laravel/Commands/ListenCommand.php`, `src/Cluster/AmiClientManager.php`, `src/Transport/Reactor.php`, `config/ami-client.php`
+Acceptance criteria:
+- `ami:listen` loop honors a bounded cadence (timeout or idle-yield) with production-safe defaults.
+- Cadence configuration is validated at startup and rejects invalid values with a typed exception.
+- Idle loop no longer hot-spins in no-event conditions.
+Required tests to add:
+- PHPUnit integration test: idle listen loop executes bounded iterations with configured cadence and does not hot-spin. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: invalid cadence configuration is rejected deterministically. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Core remains framework-agnostic (no `Illuminate\*` outside `src/Laravel/`).
+- Tick loop remains non-blocking in production runtime paths.
+
+### Phase P2 (Medium)
+- [ ] PR9-P2-01 (BATCH-PR-20260226-09) Align `timeoutMs` contract across public APIs and runtime behavior
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-09) -> P2 - `timeoutMs` API contract is misleading (ignored end-to-end)
+Target files/classes: `src/Core/Contracts/AmiClientInterface.php`, `src/Core/Contracts/TransportInterface.php`, `src/Cluster/AmiClientManager.php`, `src/Transport/Reactor.php`, `src/Laravel/Commands/ListenCommand.php`
+Acceptance criteria:
+- Chosen timeout contract is enforced end-to-end (either honored where safe or explicitly rejected/clamped everywhere).
+- Public interface signatures and documentation match runtime behavior.
+- Runtime behavior is deterministic for `timeoutMs` inputs (no silent ignores).
+Required tests to add:
+- PHPUnit unit test: `tick(timeoutMs)` behavior matches the declared contract across manager/reactor/transport. Run with `vendor/bin/phpunit`.
+- PHPUnit integration test: caller-supplied `timeoutMs` produces the expected runtime behavior across multiple nodes. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop fully non-blocking in production runtime paths.
+- Multi-server fairness under per-tick budgets remains intact.
+
+- [ ] PR9-P2-02 (BATCH-PR-20260226-09) Add hostname resolver injection support to `ConfigLoader`
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-09) -> P2 - ConfigLoader cannot inject hostname resolver for non-IP endpoints
+Target files/classes: `src/Cluster/ConfigLoader.php`, `src/Cluster/AmiClientManager.php`, `tests/Integration/*`
+Acceptance criteria:
+- `ConfigLoader::load()` accepts a hostname resolver (or pre-resolved hostnames) when `enforce_ip_endpoints` is disabled.
+- Hostname-based endpoints are bootstrapped successfully without manual manager wiring.
+- Resolver behavior is deterministic and does not perform blocking DNS in tick paths.
+Required tests to add:
+- PHPUnit integration test: hostname endpoint bootstraps via injected resolver and connects as expected. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: hostname endpoint without resolver fails fast with typed configuration exception when required. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Non-blocking runtime paths do not perform DNS resolution inside tick/reconnect.
+- Configuration validation remains deterministic and typed.
+
+- [ ] PR9-P2-03 (BATCH-PR-20260226-09) Validate critical numeric option ranges in `ClientOptions`
+Severity: P2
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-09) -> P2 - Numeric option ranges are not validated at load time
+Target files/classes: `src/Cluster/ClientOptions.php`, `src/Health/ConnectionManager.php`, `src/Exceptions/InvalidConfigurationException.php`
+Acceptance criteria:
+- All critical numeric options (timeouts, reconnect attempts, queue/buffer limits) are range-validated at construction time.
+- Invalid values fail fast with `InvalidConfigurationException` and include the offending key/value in the message.
+- Validation is centralized and reused by dependent constructors where applicable.
+Required tests to add:
+- PHPUnit unit test matrix: zero/negative/out-of-range values throw `InvalidConfigurationException` with deterministic messages. Run with `vendor/bin/phpunit`.
+- PHPUnit unit test: valid boundary values are accepted without side effects. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Memory safety caps remain enforced and bounded.
+- Reconnect storm protections remain intact under valid configuration.
+
+### Phase P3 (Low)
+- [ ] PR9-P3-01 (BATCH-PR-20260226-09) Make `enforceIpEndpoints` behavior explicit and consistent in `TcpTransport`
+Severity: P3
+Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-09) -> P3 - `enforceIpEndpoints` flag does not change transport behavior
+Target files/classes: `src/Transport/TcpTransport.php`, `src/Cluster/ClientOptions.php`, `tests/Unit/Transport/*`
+Acceptance criteria:
+- Transport behavior matches configuration: either enforce IP-only everywhere or permit hostnames when `enforceIpEndpoints` is disabled.
+- Configuration ambiguity is removed and behavior is documented in code comments where necessary.
+- Endpoint validation paths are covered by deterministic tests.
+Required tests to add:
+- PHPUnit unit test: hostname endpoint behavior matches `enforceIpEndpoints` configuration. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Transport endpoint policy is deterministic and consistent across code paths.

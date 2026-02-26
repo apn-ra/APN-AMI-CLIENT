@@ -18,9 +18,11 @@ use Apn\AmiClient\Laravel\AmiClientServiceProvider;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
+#[AllowMockObjectsWithoutExpectations]
 class AmiClientServiceProviderTest extends TestCase
 {
     protected Container $app;

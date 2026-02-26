@@ -36,7 +36,7 @@ class CircuitBreakerProbeTest extends TestCase
 
         $transport = new class implements TransportInterface {
             public function open(): void { throw new \RuntimeException('fail'); }
-            public function close(): void {}
+            public function close(bool $graceful = true): void {}
             public function send(string $data): void {}
             public function tick(int $timeoutMs = 0): void {}
             public function onData(callable $callback): void {}

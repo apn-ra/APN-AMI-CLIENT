@@ -112,7 +112,7 @@ class TcpTransport implements TransportInterface
             $this->logTransportError('set_blocking', $blockingError, [
                 'remote' => $remote,
             ]);
-            $this->close();
+            $this->close(false);
             throw new ConnectionException(sprintf(
                 "Could not configure non-blocking mode for %s",
                 $remote
@@ -126,8 +126,12 @@ class TcpTransport implements TransportInterface
     /**
      * @inheritDoc
      */
-    public function close(): void
+    public function close(bool $graceful = true): void
     {
+        if (!$graceful) {
+            $this->clearWriteBuffer();
+        }
+
         if ($this->resource !== null && is_resource($this->resource)) {
             [$closed, $error] = $this->captureError(function () {
                 return fclose($this->resource);
@@ -199,6 +203,8 @@ class TcpTransport implements TransportInterface
      */
     public function tick(int $timeoutMs = 0): void
     {
+        $timeoutMs = $this->normalizeTimeoutMs($timeoutMs);
+
         if ($this->resource === null || !is_resource($this->resource)) {
             return;
         }
@@ -220,7 +226,7 @@ class TcpTransport implements TransportInterface
 
         if ($ready === false) {
             $this->logTransportError('stream_select', $error);
-            $this->close();
+            $this->close(false);
             return;
         }
 
@@ -259,14 +265,14 @@ class TcpTransport implements TransportInterface
 
             if ($data === false) {
                 $this->logTransportError('read', $error);
-                $this->close();
+                $this->close(false);
                 return;
             }
 
             if ($data === '') {
                 // If stream_select said it's ready but we read nothing, it might be EOF.
                 if (feof($this->resource)) {
-                    $this->close();
+                    $this->close(false);
                 }
                 break;
             }
@@ -302,7 +308,7 @@ class TcpTransport implements TransportInterface
 
         if ($written === false) {
             $this->logTransportError('write', $error);
-            $this->close();
+            $this->close(false);
             return;
         }
 
@@ -315,8 +321,7 @@ class TcpTransport implements TransportInterface
      */
     public function terminate(): void
     {
-        $this->close();
-        $this->writeBuffer->clear();
+        $this->close(false);
     }
 
     /**
@@ -345,7 +350,7 @@ class TcpTransport implements TransportInterface
                 $this->connected = true;
                 return;
             }
-            $this->close();
+            $this->close(false);
             return;
         }
 
@@ -356,7 +361,17 @@ class TcpTransport implements TransportInterface
             return;
         }
 
-        $this->close();
+        $this->close(false);
+    }
+
+    protected function clearWriteBuffer(): void
+    {
+        $this->writeBuffer->clear();
+    }
+
+    private function normalizeTimeoutMs(int $timeoutMs): int
+    {
+        return 0;
     }
 
     /**

@@ -20,12 +20,14 @@ use Apn\AmiClient\Protocol\Logoff;
 use Apn\AmiClient\Core\EventQueue;
 use Apn\AmiClient\Core\Logger;
 use Psr\Log\NullLogger;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
 use Apn\AmiClient\Exceptions\ActionSendFailedException;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Psr\Log\AbstractLogger;
 
+#[AllowMockObjectsWithoutExpectations]
 class AmiClientTest extends TestCase
 {
     public function testGetServerKey(): void
@@ -287,7 +289,12 @@ class AmiClientTest extends TestCase
     {
         $transport = $this->createMock(TransportInterface::class);
         $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
-        $client = new AmiClient('node1', $transport, $correlation, logger: new Logger());
+        $output = [];
+        $logger = new Logger(sinkWriter: function (string $line) use (&$output): int {
+            $output[] = $line;
+            return strlen($line);
+        });
+        $client = new AmiClient('node1', $transport, $correlation, logger: $logger);
 
         $transport->method('isConnected')->willReturn(true);
         $client->processTick(); // Move to READY
@@ -311,14 +318,13 @@ class AmiClientTest extends TestCase
         $eventQueue->push(AmiEvent::create(new Event(['event' => 'TestEvent']), 'node1'));
         $eventQueue->push(AmiEvent::create(new Event(['event' => 'TestEvent']), 'node1'));
 
-        ob_start();
         $client->processTick();
-        $output = ob_get_clean();
+        $logged = implode('', $output);
 
         $this->assertEquals(2, $specificCalls);
         $this->assertEquals(2, $anyCalls);
         $this->assertSame(HealthStatus::READY, $client->getHealthStatus());
-        $this->assertStringContainsString('LOG_FALLBACK', $output);
+        $this->assertStringContainsString('LOG_FALLBACK', $logged);
     }
 
     public function testPendingCallbackExceptionsAreIsolatedAndDoNotBreakSubsequentActions(): void
@@ -513,7 +519,7 @@ class AmiClientTest extends TestCase
         $this->assertSame(0, $correlation->count());
     }
 
-    public function testEventDropLogIncludesNormalizedQueueFields(): void
+    public function testEventDropLogsAreCoalescedByIntervalWithAccurateCounters(): void
     {
         $logger = new class extends AbstractLogger {
             public array $records = [];
@@ -532,6 +538,7 @@ class AmiClientTest extends TestCase
         $eventQueue = new EventQueue(1);
         $parser = new Parser();
         $onDataCallback = null;
+        $now = 1000.0;
 
         $transport->method('onData')->willReturnCallback(function ($callback) use (&$onDataCallback) {
             $onDataCallback = $callback;
@@ -545,25 +552,36 @@ class AmiClientTest extends TestCase
             parser: $parser,
             eventQueue: $eventQueue,
             logger: $logger,
-            maxEventsPerTick: 0
+            maxEventsPerTick: 0,
+            eventDropLogIntervalMs: 1000,
+            clock: static function () use (&$now): float {
+                return $now;
+            }
         );
 
         $client->processTick();
         $onDataCallback("Event: TestEvent\r\n\r\nEvent: TestEvent\r\n\r\n");
         $client->processTick();
+        $onDataCallback("Event: TestEvent\r\n\r\nEvent: TestEvent\r\n\r\n");
+        $client->processTick();
+        $now += 1.1;
+        $client->processTick();
 
-        $record = null;
+        $records = [];
         foreach ($logger->records as $candidate) {
-            if ($candidate['message'] === 'Event dropped due to queue capacity') {
-                $record = $candidate;
-                break;
+            if ($candidate['message'] === 'Event drops summary due to queue capacity') {
+                $records[] = $candidate;
             }
         }
 
-        $this->assertNotNull($record);
-        $this->assertArrayHasKey('queue_depth', $record['context']);
-        $this->assertArrayHasKey('queue_type', $record['context']);
-        $this->assertSame('event_queue', $record['context']['queue_type']);
+        $this->assertCount(2, $records);
+        $this->assertArrayHasKey('dropped_delta', $records[0]['context']);
+        $this->assertArrayHasKey('queue_depth', $records[0]['context']);
+        $this->assertArrayHasKey('queue_type', $records[0]['context']);
+        $this->assertSame('event_queue', $records[0]['context']['queue_type']);
+        $this->assertSame(1, $records[0]['context']['dropped_delta']);
+        $this->assertSame(2, $records[1]['context']['dropped_delta']);
+        $this->assertSame(3, $eventQueue->getDroppedEventsCount());
     }
 
     public function testHealthReporting(): void
@@ -598,7 +616,7 @@ class AmiClientTest extends TestCase
             ->method('record')
             ->with(
                 'ami_action_latency_ms',
-                $this->isType('float'),
+                $this->isFloat(),
                 $this->callback(function($labels) {
                     return $labels['server_key'] === 'node1' && $labels['server_host'] === '127.0.0.1';
                 })
@@ -620,13 +638,13 @@ class AmiClientTest extends TestCase
             private $callback = null;
 
             public function open(): void {}
-            public function close(): void { $this->closeCalls++; $this->connected = false; }
+            public function close(bool $graceful = true): void { $this->closeCalls++; $this->connected = false; }
             public function send(string $data): void { $this->sendCalls++; $this->sentPayloads[] = $data; }
             public function tick(int $timeoutMs = 0): void {}
             public function onData(callable $callback): void { $this->callback = $callback; }
             public function isConnected(): bool { return $this->connected; }
             public function getPendingWriteBytes(): int { return $this->pendingBytes; }
-            public function terminate(): void { $this->close(); }
+            public function terminate(): void { $this->close(false); }
             public function setPendingWriteBytes(int $bytes): void { $this->pendingBytes = $bytes; }
         };
         $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
@@ -667,13 +685,13 @@ class AmiClientTest extends TestCase
             public int $closeCalls = 0;
             private int $pendingBytes = 0;
             public function open(): void {}
-            public function close(): void { $this->closeCalls++; $this->connected = false; }
+            public function close(bool $graceful = true): void { $this->closeCalls++; $this->connected = false; }
             public function send(string $data): void { throw new \RuntimeException('logoff send failed'); }
             public function tick(int $timeoutMs = 0): void {}
             public function onData(callable $callback): void {}
             public function isConnected(): bool { return $this->connected; }
             public function getPendingWriteBytes(): int { return $this->pendingBytes; }
-            public function terminate(): void { $this->close(); }
+            public function terminate(): void { $this->close(false); }
         };
 
         $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());

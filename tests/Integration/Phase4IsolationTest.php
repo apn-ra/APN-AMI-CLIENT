@@ -24,12 +24,12 @@ class Phase4IsolationTest extends TestCase
             public function isConnected(): bool { return $this->connected; }
             public function getPendingWriteBytes(): int { return 0; }
             public function open(): void { $this->connected = true; }
-            public function close(): void { $this->connected = false; }
+            public function close(bool $graceful = true): void { $this->connected = false; }
             public function onData(callable $callback): void { $this->dataCallback = $callback; }
             public function send(string $data): void {}
             public function tick(int $timeoutMs = 0): void {}
             public function getStream() { return fopen('php://memory', 'r+'); }
-            public function terminate(): void { $this->close(); }
+            public function terminate(): void { $this->close(false); }
         };
     }
 

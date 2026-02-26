@@ -482,6 +482,8 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 | BATCH-PR-20260226-05 | 2026-02-26 | Transport/Logger/Error-Path Hardening | PR5-P1-01 ... PR5-P2-03 |
 | BATCH-PR-20260226-06 | 2026-02-26 | Callback Exception Observability + Parser Config Guardrails | PR6-P2-01 ... PR6-P2-04 |
 | BATCH-PR-20260226-07 | 2026-02-26 | Session-Boundary Write Safety + Non-Blocking/Log-Storm Controls | PR7-P0-01 ... PR7-P2-01 |
+| BATCH-PR-20260226-08 | 2026-02-26 | Non-Blocking Invariant + Circuit Breaker + Logger Observability | PR8-P1-01 ... PR8-P3-02 |
+| BATCH-PR-20260226-09 | 2026-02-26 | Cadence + Timeout Contract + Config Validation + Hostname Support + Endpoint Policy | PR9-P1-01 ... PR9-P3-01 |
 
 ### Delta 2026-02-26 (BATCH-PR-20260226-02): Parser/Correlation/Logging/Security Hardening
 
@@ -692,3 +694,91 @@ New/Updated Invariants:
 - Event-drop telemetry must be coalesced/rate-limited with deterministic counters.
 - Laravel listen loop must not busy-spin.
 - Production runtime path must enforce explicit non-blocking timeout semantics.
+
+## Delta 2026-02-26 (BATCH-PR-20260226-08): Non-Blocking Invariant + Circuit Breaker + Logger Observability
+
+### P1 - Tick loop non-blocking invariant is not enforced
+- Problem description: Runtime paths allow blocking `stream_select` waits when non-blocking enforcement flags are disabled.
+- Dialer impact: Blocking tick stalls event handling, timeout sweeps, and reconnect fairness under misconfiguration in 24/7 dialer workloads.
+- Required invariant: Tick loop is fully non-blocking in production runtime paths.
+- Concrete implementation direction: Remove production opt-out and clamp runtime timeouts to `0` in `AmiClientManager`, `Reactor`, and `TcpTransport`, or split dev/test blocking components so production classes cannot block.
+- Tasks: PR8-P1-01
+
+### P2 - Read-timeout failures are not recorded in circuit breaker
+- Problem description: `recordReadTimeout()` schedules reconnects without recording circuit-breaker failure state.
+- Dialer impact: Repeated read timeouts can churn reconnects without breaker dampening, weakening herd control.
+- Required invariant: Read-timeout failures are recorded and influence circuit-breaker state transitions.
+- Concrete implementation direction: Add `recordCircuitFailure('read_timeout')` in `recordReadTimeout()` and ensure logging/metrics parity with other failure modes.
+- Tasks: PR8-P2-01
+
+### P2 - Logger sink drops lack structured warning logs
+- Problem description: Logger drop conditions increment metrics but emit no structured warning logs for sink drops.
+- Dialer impact: Operators relying on logs miss active log-loss conditions during incidents.
+- Required invariant: Logger sink drops emit structured, throttled warning logs with context (server key, queue depth, reason) in addition to metrics.
+- Concrete implementation direction: Emit throttled warnings for `capacity_exceeded`, `sink_exception`, and `sink_write_failed` with structured fields and keep metric counters.
+- Tasks: PR8-P2-02
+
+### P3 - Logger sink queue uses O(n) dequeue
+- Problem description: `array_shift()` in sink drain loop creates O(n) reindexing cost under logging bursts.
+- Dialer impact: Avoidable CPU cost under sustained logging can degrade throughput.
+- Required invariant: Logger sink queue uses O(1) dequeue behavior under sustained logging.
+- Concrete implementation direction: Replace array queue with `SplQueue` (or head-index ring buffer) to avoid reindexing.
+- Tasks: PR8-P3-01
+
+### P3 - PendingAction fallback telemetry bypasses PSR-3 logger
+- Problem description: Fallback exception telemetry uses `error_log` directly.
+- Dialer impact: Missing structured logging, redaction, and consistent context during callback failures.
+- Required invariant: PendingAction fallback telemetry uses PSR-3 logging path.
+- Concrete implementation direction: Inject PSR-3 logger into `PendingAction` (or route via correlation registry logger) for fallback exception telemetry.
+- Tasks: PR8-P3-02
+
+New/Updated Invariants:
+- Tick loop is fully non-blocking in production runtime paths.
+- Read-timeout failures influence circuit-breaker state transitions.
+- Logger sink drops emit structured, throttled warnings in addition to metrics.
+- Logger sink queue uses O(1) dequeue behavior.
+- PendingAction fallback telemetry uses PSR-3 logger path.
+
+## Delta 2026-02-26 (BATCH-PR-20260226-09): Cadence + Timeout Contract + Config Validation + Hostname Support + Endpoint Policy
+
+### P1 - Worker cadence controls are effectively disabled (hot-spin risk)
+- Problem description: The `ami:listen` worker loop runs without honoring any bounded wait window, resulting in a tight spin (`while (true)` with timeout clamped to `0`).
+- Dialer impact: Sustained CPU hot-spin in 24/7 deployments, reduced headroom during reconnect storms, and avoidable resource contention on multi-tenant dialer hosts.
+- Required invariant: Worker loop cadence is bounded and configurable; idle loops must not hot-spin.
+- Concrete implementation direction: Introduce an explicit cadence strategy in the worker layer that honors a bounded timeout or idle-yield policy with production defaults; ensure the cadence hook is unit-tested and validated at startup.
+- Tasks: PR9-P1-01
+
+### P2 - `timeoutMs` API contract is misleading (ignored end-to-end)
+- Problem description: Public `tick(timeoutMs)` APIs accept a timeout but runtime clamps it to `0`, so the caller-supplied wait window is ignored.
+- Dialer impact: Operators expect cadence control or blocking semantics that never occur, making tuning unreliable and causing incorrect operational assumptions.
+- Required invariant: Timeout semantics are explicit and consistent across interface, manager, and command layers (honored or rejected deterministically).
+- Concrete implementation direction: Either honor `timeoutMs` in safe runtime modes or remove/deprecate it and enforce always-non-blocking semantics; document and test the chosen contract end-to-end.
+- Tasks: PR9-P2-01
+
+### P2 - ConfigLoader cannot inject hostname resolver for non-IP endpoints
+- Problem description: `ConfigLoader::load()` cannot accept a hostname resolver, so non-IP endpoints fail even when `enforce_ip_endpoints` is disabled.
+- Dialer impact: Production configs using hostnames cannot bootstrap via the standard loader, increasing startup failure risk and configuration drift.
+- Required invariant: When hostname endpoints are allowed, ConfigLoader must support resolver injection or pre-resolution before manager construction.
+- Concrete implementation direction: Extend `ConfigLoader::load()` to accept a hostname resolver (or pre-resolve hostnames) and add integration tests that cover hostname bootstrapping.
+- Tasks: PR9-P2-02
+
+### P2 - Numeric option ranges are not validated at load time
+- Problem description: Critical numeric settings (timeouts, budgets, queue limits) are accepted without range validation.
+- Dialer impact: Invalid values can silently destabilize reconnect behavior, timeouts, and queue safety in production.
+- Required invariant: All critical numeric options are range-validated with typed `InvalidConfigurationException` on invalid values.
+- Concrete implementation direction: Add strict validation for reconnect attempts, timeouts, and capacity/buffer limits in `ClientOptions` and dependent constructors; include negative tests for invalid values.
+- Tasks: PR9-P2-03
+
+### P3 - `enforceIpEndpoints` flag does not change transport behavior
+- Problem description: `TcpTransport` always rejects non-IP endpoints regardless of `enforceIpEndpoints` configuration.
+- Dialer impact: Configuration ambiguity and false expectations about allowed endpoint types.
+- Required invariant: Transport endpoint policy must reflect configuration; behavior must be explicit and tested.
+- Concrete implementation direction: Either remove the flag and enforce IP-only behavior everywhere, or implement conditional behavior that accepts hostnames when allowed and cover it with tests.
+- Tasks: PR9-P3-01
+
+New/Updated Invariants:
+- Worker loop cadence must be bounded and configurable (no hot-spin under idle conditions).
+- Timeout contract must be explicit and consistent across API surfaces.
+- ConfigLoader must support hostname resolution when hostnames are allowed.
+- Critical numeric options are range-validated at load time with typed exceptions.
+- Transport endpoint policy matches `enforceIpEndpoints` configuration.

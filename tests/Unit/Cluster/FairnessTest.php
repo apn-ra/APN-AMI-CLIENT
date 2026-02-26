@@ -14,8 +14,10 @@ use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Transport\TcpTransport;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
 
+#[AllowMockObjectsWithoutExpectations]
 class FairnessTest extends TestCase
 {
     public function test_max_frames_per_tick_budget(): void

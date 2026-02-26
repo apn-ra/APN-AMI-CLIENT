@@ -55,6 +55,8 @@ return [
         // If false, hostnames still require pre-resolved IPs or an injected resolver at bootstrap.
         'enforce_ip_endpoints' => true,
         'heartbeat_interval' => 15,
+        // Minimum interval between event-drop summary warnings.
+        'event_drop_log_interval_ms' => 1000,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,
         // Circuit breaker: cooldown seconds before allowing probes.
@@ -74,4 +76,17 @@ return [
     |
     */
     'bridge_laravel_events' => env('AMI_BRIDGE_LARAVEL_EVENTS', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Listen Worker Loop
+    |--------------------------------------------------------------------------
+    |
+    | Controls the ami:listen command cadence. The worker performs bounded
+    | blocking ticks to avoid CPU busy-spin while remaining responsive.
+    |
+    */
+    'listen' => [
+        'tick_timeout_ms' => env('AMI_LISTEN_TICK_TIMEOUT_MS', 25),
+    ],
 ];
