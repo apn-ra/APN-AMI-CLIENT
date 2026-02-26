@@ -479,6 +479,7 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 | BATCH-PR-20260226-02 | 2026-02-26 | Parser/Correlation/Logging/Security Hardening | PR2-P1-01 Ã¢â‚¬Â¦ PR2-P2-05 |
 | BATCH-PR-20260226-03 | 2026-02-26 | Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring | PR3-P1-01 … PR3-P3-01 |
 | BATCH-PR-20260226-04 | 2026-02-26 | Non-Blocking DNS + Async Connect Verification + Redaction | PR4-P1-01 ... PR4-P3-02 |
+| BATCH-PR-20260226-05 | 2026-02-26 | Transport/Logger/Error-Path Hardening | PR5-P1-01 ... PR5-P2-03 |
 
 ### Delta 2026-02-26 (BATCH-PR-20260226-02): Parser/Correlation/Logging/Security Hardening
 
@@ -583,3 +584,45 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 
 New/Updated Invariants:
 - Tick loop fully non-blocking (no DNS resolution or blocking I/O inside tick/reconnect paths).
+
+### Delta 2026-02-26 (BATCH-PR-20260226-05): Transport/Logger/Error-Path Hardening
+
+### P1 — Transport/Selector Error Suppression Removal
+Problem description: Transport and selector operations suppress errors via @, which hides failures and prevents deterministic failure handling.
+Dialer impact: Silent stalls and delayed reconnects during network faults; reduced observability during outages.
+Required invariant: Transport/selector errors are observable and never silently suppressed.
+Concrete implementation direction: Remove @ operators from socket/selector calls, capture native error details (error_get_last() and errno where available), and emit structured warning/metrics before controlled close/retry.
+Tasks: PR5-P1-01
+
+### P1 — Logger Non-Throwing Under Serialization Failure
+Problem description: Logger can throw JsonException during exception reporting, breaking listener isolation and dispatch loops.
+Dialer impact: A single malformed log context can terminate event dispatch for the tick and violate isolation guarantees.
+Required invariant: Listener exceptions cannot break dispatch loops; logging must be non-throwing.
+Concrete implementation direction: Wrap Logger::log() serialization/output in internal try/catch, fall back to minimal plain-text output on encoding failure, and never throw from logger paths.
+Tasks: PR5-P1-02
+
+### P2 — Redaction Regex Validation Without Suppression
+Problem description: Redaction regex evaluation is suppressed, so invalid patterns fail silently and disable redaction.
+Dialer impact: Secrets can leak in logs due to hidden configuration defects.
+Required invariant: Invalid redaction patterns fail fast; redaction never silently disabled.
+Concrete implementation direction: Validate redaction patterns at construction, remove suppression operators, and throw InvalidConfigurationException on invalid patterns; log/metric failed evaluations deterministically.
+Tasks: PR5-P2-01
+
+### P2 — Remove Blocking DNS From Manager Bootstrap
+Problem description: gethostbyname() is used during manager bootstrap for optional hostname resolution.
+Dialer impact: DNS latency can block startup/reload, delaying readiness and failover.
+Required invariant: No blocking DNS resolution in runtime-critical paths.
+Concrete implementation direction: Keep IP-only policy default; if hostname mode is enabled, require pre-resolved addresses via config loader or resolver injection outside runtime-critical paths.
+Tasks: PR5-P2-02
+
+### P2 — Library Signal Handler Must Not Exit Process
+Problem description: Signal handler calls exit(0) from library code.
+Dialer impact: Embedded runtimes can be terminated unexpectedly, impacting unrelated workloads.
+Required invariant: Library code must not terminate the host process.
+Concrete implementation direction: Replace exit(0) with a callback/event hook so the host application decides shutdown semantics.
+Tasks: PR5-P2-03
+
+New/Updated Invariants:
+- Listener exceptions cannot break dispatch loops (logger must never throw).
+- No blocking DNS resolution in runtime-critical paths.
+- Library code must not terminate the host process.

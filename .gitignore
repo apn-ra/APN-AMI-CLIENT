@@ -33,3 +33,4 @@ auth.json
 docs/prompts/*
 .codex/*
 AGENTS.md
+.aider*
