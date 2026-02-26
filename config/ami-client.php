@@ -50,6 +50,8 @@ return [
         'redaction_key_patterns' => [],
         // Max ActionID length (bounded internally to 64..256).
         'max_action_id_length' => 128,
+        // Production hostname policy: true requires literal IP endpoints (no DNS in connect path).
+        'enforce_ip_endpoints' => false,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,

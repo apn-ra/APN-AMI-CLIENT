@@ -28,13 +28,17 @@ final class CorrelationRegistry
 
     /** @var array<string, Event[]> */
     private array $collectedEvents = [];
+    /** @var callable(string, Throwable, Action): void|null */
+    private $callbackExceptionHandler = null;
 
     /**
      * @param int $maxPending Hard limit for concurrent pending actions.
      */
     public function __construct(
-        private readonly int $maxPending = 5000
+        private readonly int $maxPending = 5000,
+        ?callable $callbackExceptionHandler = null
     ) {
+        $this->callbackExceptionHandler = $callbackExceptionHandler;
     }
 
     /**
@@ -58,7 +62,11 @@ final class CorrelationRegistry
         $strategy = $action->getCompletionStrategy();
         $timeoutSeconds ??= $strategy->getMaxDurationMs() / 1000.0;
 
-        $pendingAction = new PendingAction($action, microtime(true) + $timeoutSeconds);
+        $pendingAction = new PendingAction(
+            $action,
+            microtime(true) + $timeoutSeconds,
+            $this->callbackExceptionHandler
+        );
         $this->pending[$actionId] = $pendingAction;
         $this->collectedEvents[$actionId] = [];
 
@@ -156,6 +164,29 @@ final class CorrelationRegistry
         foreach (array_keys($this->pending) as $actionId) {
             $this->fail((string)$actionId, $exception);
         }
+    }
+
+    /**
+     * Rejects and removes a pending action if it exists.
+     *
+     * @return bool True when an action existed and was removed.
+     */
+    public function rollback(string $actionId, Throwable $exception): bool
+    {
+        if (!isset($this->pending[$actionId])) {
+            return false;
+        }
+
+        $this->fail($actionId, $exception);
+        return true;
+    }
+
+    /**
+     * Sets the callback exception handler for future pending actions.
+     */
+    public function setCallbackExceptionHandler(?callable $handler): void
+    {
+        $this->callbackExceptionHandler = $handler;
     }
 
     /**

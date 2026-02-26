@@ -34,6 +34,7 @@ readonly class ClientOptions
         public int $maxFrameSize = 1048576, // 1MB
         public int $maxActionIdLength = 128,
         public int $maxConnectAttemptsPerTick = 5,
+        public bool $enforceIpEndpoints = false,
         public bool $lazy = true,
     ) {}
 
@@ -63,6 +64,7 @@ readonly class ClientOptions
             maxFrameSize: $options['max_frame_size'] ?? 1048576,
             maxActionIdLength: $options['max_action_id_length'] ?? 128,
             maxConnectAttemptsPerTick: $options['max_connect_attempts_per_tick'] ?? 5,
+            enforceIpEndpoints: $options['enforce_ip_endpoints'] ?? false,
             lazy: $options['lazy'] ?? true,
         );
     }

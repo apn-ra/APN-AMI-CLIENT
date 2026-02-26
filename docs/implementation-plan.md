@@ -474,9 +474,10 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 
 ### Delta Index
 
-| Batch ID | Date | Summary | Linked Task ID Range |
+| Batch ID | Date | Summary | Task IDs |
 | --- | --- | --- | --- |
 | BATCH-PR-20260226-02 | 2026-02-26 | Parser/Correlation/Logging/Security Hardening | PR2-P1-01 â€¦ PR2-P2-05 |
+| BATCH-PR-20260226-03 | 2026-02-26 | Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring | PR3-P1-01 � PR3-P3-01 |
 
 ### Delta 2026-02-26 (BATCH-PR-20260226-02): Parser/Correlation/Logging/Security Hardening
 
@@ -504,3 +505,54 @@ In a Laravel environment, the connection topology is critical for dialer-grade s
 - Enforce max `ActionID` length (e.g., 96â€“128 chars).
 - If exceeded: truncate + stable hash suffix to preserve uniqueness (configured via `ClientOptions.max_action_id_length`).
 - Document uniqueness guarantees and logging expectations.
+
+### Delta 2026-02-26 (BATCH-PR-20260226-03): Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring
+
+1) P1 - Remove hidden blocking behavior in connect/close paths
+- Document production endpoint policy:
+    - Prefer IP endpoints in production OR pre-resolve hostnames at bootstrap (never inside tick)
+    - If hostnames are allowed, define a controlled resolution strategy (startup-only, cached, optional periodic refresh outside tick)
+- Document non-blocking shutdown:
+    - Remove any `close()` internal waits (e.g., tick/select timeouts)
+    - Introduce a non-blocking "CLOSING" state or shutdown handshake:
+        - enqueue logoff (optional)
+        - rely on normal tick flush
+        - close on subsequent tick when buffers drained or deadline reached
+    - Make "graceful logoff" optional and bounded by a deadline
+- Tasks: PR3-P1-01, PR3-P1-02
+
+2) P1 - Correlation transactionality: no orphan pending actions on send failure
+- Define invariant:
+    - "If transport->send() fails, the newly registered pending action MUST be removed/failed immediately."
+- Document implementation direction:
+    - Add correlation rollback API (e.g., cancel/failAndRemove by actionId)
+    - In sendInternal: register -> try send -> on exception: rollback + typed failure + rethrow typed exception
+    - Ensure metrics/logging for rollback events (reason=backpressure/send_failed)
+- Tasks: PR3-P1-03
+
+3) P1 - Pending completion callback isolation
+- Define invariant:
+    - "User callback exceptions must not propagate into the protocol/tick loop."
+- Document implementation direction:
+    - Wrap callback invocation in PendingAction::notify() with try/catch
+    - Log structured context (server_key, action_id, callback identity, exception metadata)
+    - Increment metric counter for callback exceptions
+    - Continue processing remaining events/actions
+- Tasks: PR3-P1-04
+
+4) P2 - Metrics wiring by default through manager/client stack
+- Document that AmiClientManager must accept MetricsCollectorInterface injection
+- Propagate collector into AmiClient, EventQueue, ConnectionManager during createClient()
+- Define baseline counters required for production:
+    - event_dropped, backpressure, reconnect_attempt, breaker_transition, callback_exception
+- Tasks: PR3-P2-01
+
+5) P2 - Validate EventQueue capacity and config boundaries
+- Require capacity >= 1; throw typed config exception at construction time
+- Recommend validating other critical bounds consistently (maxPendingActions, writeBufferLimit, maxFrameSize)
+- Tasks: PR3-P2-02
+
+6) P3 - Shutdown/logoff telemetry
+- Replace silent swallow with debug/warn logs including server_key and reason
+- Tasks: PR3-P3-01
+

@@ -7,6 +7,7 @@ namespace Apn\AmiClient\Correlation;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Protocol\Response;
+use Throwable;
 
 /**
  * Orchestrates ActionID generation and correlation of messages to actions.
@@ -65,6 +66,22 @@ class CorrelationManager
     public function failAll(string $reason): void
     {
         $this->registry->failAll($reason);
+    }
+
+    /**
+     * Rejects and removes a pending action if still registered.
+     */
+    public function rollback(string $actionId, Throwable $exception): bool
+    {
+        return $this->registry->rollback($actionId, $exception);
+    }
+
+    /**
+     * Sets callback-exception isolation/reporting handler for pending actions.
+     */
+    public function setCallbackExceptionHandler(?callable $handler): void
+    {
+        $this->registry->setCallbackExceptionHandler($handler);
     }
 
     /**

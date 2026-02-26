@@ -57,6 +57,7 @@ class FloodSimulationTest extends TestCase
         $registry = new CorrelationRegistry(10);
         $correlation = new CorrelationManager(new ActionIdGenerator('node1'), $registry);
         $clientWithBackpressure = new AmiClient('node1', $transport, $correlation);
+        $clientWithBackpressure->processTick();
         
         for ($i = 0; $i < 10; $i++) {
             $clientWithBackpressure->send(new GenericAction('Ping'));

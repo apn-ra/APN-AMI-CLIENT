@@ -10,6 +10,7 @@ use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\PendingAction;
+use Apn\AmiClient\Exceptions\ActionSendFailedException;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
@@ -50,6 +51,11 @@ class AmiClient implements AmiClientInterface
 
     private ?string $username = null;
     private ?string $secret = null;
+
+    private bool $shutdownRequested = false;
+    private bool $shutdownLogoffQueued = false;
+    private ?float $shutdownDeadline = null;
+    private const SHUTDOWN_GRACE_SECONDS = 0.25;
 
     private string $host = 'unknown';
     private int $port = 0;
@@ -102,6 +108,23 @@ class AmiClient implements AmiClientInterface
         );
         $this->eventQueue = $eventQueue ?? new EventQueue(metrics: $this->metrics, labels: $labels);
         $this->eventFilter = $eventFilter ?? new EventFilter();
+
+        $this->correlation->setCallbackExceptionHandler(function (string $callbackIdentity, Throwable $e, Action $action): void {
+            $this->logger->error('Pending action callback failed', [
+                'server_key' => $this->serverKey,
+                'action_id' => $action->getActionId(),
+                'action_name' => $action->getActionName(),
+                'callback' => $callbackIdentity,
+                'exception_class' => $e::class,
+                'exception' => $e->getMessage(),
+            ]);
+
+            $this->metrics->increment('ami_callback_exceptions_total', [
+                'server_key' => $this->serverKey,
+                'server_host' => $this->host,
+                'action' => $action->getActionName(),
+            ]);
+        });
         
         $this->transport->onData($this->onRawData(...));
     }
@@ -131,19 +154,23 @@ class AmiClient implements AmiClientInterface
      */
     public function close(): void
     {
-        if ($this->transport->isConnected()) {
-            try {
-                $this->sendInternal(new Logoff());
-                // Give it a tiny moment to flush the logoff if possible
-                $this->transport->tick(10);
-            } catch (Throwable) {
-                // Ignore errors during logoff
-            }
+        if ($this->shutdownRequested) {
+            return;
         }
 
-        $this->transport->close();
-        $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
+        $this->shutdownRequested = true;
+        $this->shutdownLogoffQueued = false;
+        $this->shutdownDeadline = microtime(true) + self::SHUTDOWN_GRACE_SECONDS;
+
         $this->correlation->failAll('Client closed');
+        $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
+
+        if (!$this->transport->isConnected()) {
+            $this->finalizeShutdown('Client closed');
+            return;
+        }
+
+        $this->queueLogoffIfNeeded();
     }
 
     /**
@@ -206,12 +233,30 @@ class AmiClient implements AmiClientInterface
         $raw = $this->serializeAction($action);
         try {
             $this->transport->send($raw);
-        } catch (BackpressureException $e) {
+        } catch (Throwable $e) {
+            $wrapped = new ActionSendFailedException(
+                serverKey: $this->serverKey,
+                actionId: $actionId,
+                actionName: $action->getActionName(),
+                message: sprintf(
+                    'Failed to send action %s (%s) on server %s: %s',
+                    $action->getActionName(),
+                    $actionId,
+                    $this->serverKey,
+                    $e->getMessage()
+                ),
+                previous: $e
+            );
+
+            $rolledBack = $this->correlation->rollback($actionId, $wrapped);
+
             $this->logger->warning('Action rejected due to transport backpressure', [
                 'action_id' => $actionId,
                 'action_name' => $action->getActionName(),
                 'queue_depth' => $this->transport->getPendingWriteBytes(),
                 'queue_type' => 'write_buffer_bytes',
+                'rollback_applied' => $rolledBack,
+                'exception' => $e::class,
             ]);
 
             $this->metrics->increment('ami_write_buffer_backpressure_events_total', [
@@ -220,7 +265,7 @@ class AmiClient implements AmiClientInterface
                 'reason' => 'transport_buffer_full',
             ]);
 
-            throw $e;
+            throw $wrapped;
         }
 
         return $pending;
@@ -286,6 +331,11 @@ class AmiClient implements AmiClientInterface
             return false;
         }
 
+        if ($this->shutdownRequested) {
+            $this->processShutdown();
+            return false;
+        }
+
         // 1. Protocol Parsing with budget (Task 3.2)
         $framesProcessed = 0;
         try {
@@ -298,7 +348,7 @@ class AmiClient implements AmiClientInterface
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),
             ]);
-            $this->close();
+            $this->forceClose('Protocol error');
             return false;
         }
 
@@ -380,7 +430,7 @@ class AmiClient implements AmiClientInterface
                      'queue_depth' => $this->eventQueue->count(),
                      'queue_type' => 'event_queue',
                  ]);
-                 $this->close();
+                 $this->forceClose('Read timed out');
                  $this->connectionManager->recordReadTimeout();
                  return false;
              }
@@ -398,14 +448,14 @@ class AmiClient implements AmiClientInterface
                     'queue_depth' => $this->eventQueue->count(),
                     'queue_type' => 'event_queue',
                  ]);
-                 $this->close();
+                 $this->forceClose('Authentication timed out');
                  return false;
              }
              
              if ($currentStatus === HealthStatus::DISCONNECTED) {
                  // If we just failed login, close once to force reconnect with backoff.
                  if ($this->connectionManager->consumeLoginFailureSignal()) {
-                     $this->close();
+                     $this->forceClose('Login failure');
                      return $attemptedConnect;
                  }
                  $this->connectionManager->setStatus(HealthStatus::CONNECTED);
@@ -481,12 +531,11 @@ class AmiClient implements AmiClientInterface
      /**
       * Emergency shutdown and resource release.
       */
-     public function terminate(): void
-     {
-         $this->close();
-         $this->transport->terminate();
-         $this->correlation->failAll('Client terminated');
-     }
+    public function terminate(): void
+    {
+        $this->forceClose('Client terminated');
+        $this->transport->terminate();
+    }
 
     /**
      * Initiate login sequence.
@@ -596,7 +645,7 @@ class AmiClient implements AmiClientInterface
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),
             ]);
-            $this->close();
+            $this->forceClose('Parser error');
         }
     }
 
@@ -672,5 +721,68 @@ class AmiClient implements AmiClientInterface
         }
 
         return implode("\r\n", $lines) . "\r\n\r\n";
+    }
+
+    private function queueLogoffIfNeeded(): void
+    {
+        if ($this->shutdownLogoffQueued || !$this->transport->isConnected()) {
+            return;
+        }
+
+        try {
+            $actionId = $this->correlation->nextActionId();
+            $logoff = (new Logoff())->withActionId($actionId);
+            $this->transport->send($this->serializeAction($logoff));
+        } catch (Throwable $e) {
+            $this->logger->warning('Graceful logoff enqueue failed during shutdown', [
+                'server_key' => $this->serverKey,
+                'reason' => 'shutdown_logoff_enqueue_failed',
+                'exception_class' => $e::class,
+                'exception' => $e->getMessage(),
+                'queue_depth' => $this->transport->getPendingWriteBytes(),
+                'queue_type' => 'write_buffer_bytes',
+            ]);
+        }
+
+        $this->shutdownLogoffQueued = true;
+    }
+
+    private function processShutdown(): void
+    {
+        if (!$this->shutdownRequested) {
+            return;
+        }
+
+        $this->queueLogoffIfNeeded();
+
+        $deadlineReached = $this->shutdownDeadline !== null
+            && microtime(true) >= $this->shutdownDeadline;
+        $pendingBytes = $this->transport->getPendingWriteBytes();
+
+        if (!$this->transport->isConnected() || $pendingBytes === 0 || $deadlineReached) {
+            $this->finalizeShutdown('Client closed');
+        }
+    }
+
+    private function finalizeShutdown(string $reason): void
+    {
+        $this->transport->close();
+        $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
+        $this->parser->reset();
+        $this->correlation->failAll($reason);
+        $this->shutdownRequested = false;
+        $this->shutdownLogoffQueued = false;
+        $this->shutdownDeadline = null;
+    }
+
+    private function forceClose(string $reason): void
+    {
+        $this->shutdownRequested = false;
+        $this->shutdownLogoffQueued = false;
+        $this->shutdownDeadline = null;
+        $this->transport->close();
+        $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
+        $this->parser->reset();
+        $this->correlation->failAll($reason);
     }
 }

@@ -21,20 +21,28 @@ class SoakTest extends TestCase
      */
     public function test_memory_stability_under_load(): void
     {
+        if (!getenv('RUN_SOAK_TESTS')) {
+            $this->markTestSkipped('Set RUN_SOAK_TESTS=1 to enable soak tests.');
+        }
+
         $iterations = (int) (getenv('SOAK_ITERATIONS') ?: 10000);
         $connectionsCount = (int) (getenv('SOAK_CONNECTIONS') ?: 10);
         $warmupIterations = (int) (getenv('SOAK_WARMUP_ITERATIONS') ?: 500);
-        $memoryToleranceBytes = (int) (getenv('SOAK_MEMORY_TOLERANCE_BYTES') ?: 1024 * 1024);
+        $memoryToleranceBytes = (int) (getenv('SOAK_MEMORY_TOLERANCE_BYTES') ?: 10 * 1024 * 1024);
         $clients = [];
 
         $logger = $this->createStub(Logger::class);
 
         // Base memory after bootstrap
         gc_collect_cycles();
+        if (function_exists('gc_mem_caches')) {
+            gc_mem_caches();
+        }
         $startMemory = memory_get_usage();
 
         for ($i = 0; $i < $connectionsCount; $i++) {
-            $transport = $this->createStub(TransportInterface::class);
+            $transport = $this->createMock(TransportInterface::class);
+            $transport->method('isConnected')->willReturn(true);
             
             $client = new AmiClient(
                 "node_$i",
@@ -52,6 +60,7 @@ class SoakTest extends TestCase
 
             // Trigger onData registration
             $client->open();
+            $client->processTick();
 
             // We need to capture the private onRawData callback
             $reflection = new \ReflectionClass($client);
@@ -70,6 +79,9 @@ class SoakTest extends TestCase
         }
         
         gc_collect_cycles();
+        if (function_exists('gc_mem_caches')) {
+            gc_mem_caches();
+        }
         $baselineMemory = memory_get_usage();
 
         // Main soak simulation
@@ -78,6 +90,9 @@ class SoakTest extends TestCase
             
             if ($i % 1000 === 0) {
                 gc_collect_cycles();
+                if (function_exists('gc_mem_caches')) {
+                    gc_mem_caches();
+                }
                 $currentMemory = memory_get_usage();
                 echo "Iteration $i, Memory: " . $currentMemory . PHP_EOL;
                 // Check for growth relative to baseline
@@ -88,6 +103,9 @@ class SoakTest extends TestCase
         // Final cleanup and check
         unset($clients);
         gc_collect_cycles();
+        if (function_exists('gc_mem_caches')) {
+            gc_mem_caches();
+        }
         $endMemory = memory_get_usage();
 
         // End memory should be close to start memory

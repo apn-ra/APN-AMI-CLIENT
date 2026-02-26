@@ -6,6 +6,7 @@ namespace Apn\AmiClient\Core;
 
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Apn\AmiClient\Events\AmiEvent;
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
 use SplQueue;
 
 /**
@@ -25,6 +26,13 @@ class EventQueue
         ?MetricsCollectorInterface $metrics = null,
         array $labels = []
     ) {
+        if ($capacity <= 0) {
+            throw new InvalidConfigurationException(sprintf(
+                'Event queue capacity must be >= 1; got %d',
+                $capacity
+            ));
+        }
+
         $this->queue = new SplQueue();
         $this->capacity = $capacity;
         $this->metrics = $metrics ?? new NullMetricsCollector();

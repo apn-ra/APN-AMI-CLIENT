@@ -30,6 +30,7 @@ class TcpTransport implements TransportInterface
         private readonly int $connectTimeout = 30,
         int $writeBufferLimit = 5242880,
         private readonly int $maxBytesReadPerTick = 1048576,
+        private readonly bool $enforceIpEndpoints = false,
     ) {
         $this->writeBuffer = new WriteBuffer($writeBufferLimit);
     }
@@ -39,6 +40,14 @@ class TcpTransport implements TransportInterface
      */
     public function open(): void
     {
+        if ($this->enforceIpEndpoints && filter_var($this->host, FILTER_VALIDATE_IP) === false) {
+            throw new ConnectionException(sprintf(
+                'Hostname endpoints are disabled by policy; provide an IP for %s:%d or pre-resolve during bootstrap.',
+                $this->host,
+                $this->port
+            ));
+        }
+
         $remote = sprintf('tcp://%s:%d', $this->host, $this->port);
         $errno = 0;
         $errstr = '';

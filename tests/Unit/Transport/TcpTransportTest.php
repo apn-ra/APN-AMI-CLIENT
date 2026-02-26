@@ -69,6 +69,31 @@ class TcpTransportTest extends TestCase
         }
     }
 
+    public function testConnectAndCloseWhenIpPolicyIsEnabled(): void
+    {
+        $transport = new TcpTransport($this->host, $this->port, enforceIpEndpoints: true);
+        $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
+        $this->assertTrue($transport->isConnected());
+
+        $transport->close();
+        $this->assertFalse($transport->isConnected());
+
+        if ($client) {
+            fclose($client);
+        }
+    }
+
+    public function testRejectsHostnameWhenIpPolicyIsEnabled(): void
+    {
+        $transport = new TcpTransport('localhost', $this->port, enforceIpEndpoints: true);
+
+        $this->expectException(ConnectionException::class);
+        $this->expectExceptionMessage('Hostname endpoints are disabled by policy');
+        $transport->open();
+    }
+
     public function testConnectFails(): void
     {
         // Use a port that is unlikely to be open.

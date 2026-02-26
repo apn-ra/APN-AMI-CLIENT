@@ -22,10 +22,12 @@ class MultiServerIsolationTest extends TestCase
         $t1 = $this->createMock(TransportInterface::class);
         $t1_callback = null;
         $t1->method('onData')->willReturnCallback(function($cb) use (&$t1_callback) { $t1_callback = $cb; });
+        $t1->method('isConnected')->willReturn(true);
         
         $t2 = $this->createMock(TransportInterface::class);
         $t2_callback = null;
         $t2->method('onData')->willReturnCallback(function($cb) use (&$t2_callback) { $t2_callback = $cb; });
+        $t2->method('isConnected')->willReturn(true);
         
         $c1 = new AmiClient('node1', $t1, new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry()));
         $c2 = new AmiClient('node2', $t2, new CorrelationManager(new ActionIdGenerator('node2'), new CorrelationRegistry()));
@@ -72,15 +74,19 @@ class MultiServerIsolationTest extends TestCase
         $t1 = $this->createMock(TransportInterface::class);
         $t1_callback = null;
         $t1->method('onData')->willReturnCallback(function($cb) use (&$t1_callback) { $t1_callback = $cb; });
+        $t1->method('isConnected')->willReturn(true);
         
         $t2 = $this->createMock(TransportInterface::class);
         $t2_callback = null;
         $t2->method('onData')->willReturnCallback(function($cb) use (&$t2_callback) { $t2_callback = $cb; });
+        $t2->method('isConnected')->willReturn(true);
         
         // Note: they use the same instance id if we're not careful, but ActionIdGenerator includes serverKey
         $c1 = new AmiClient('node1', $t1, new CorrelationManager(new ActionIdGenerator('node1', 'worker1'), new CorrelationRegistry()));
         $c2 = new AmiClient('node2', $t2, new CorrelationManager(new ActionIdGenerator('node2', 'worker1'), new CorrelationRegistry()));
         
+        $c1->processTick();
+        $c2->processTick();
         $p1 = $c1->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));
         $p2 = $c2->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));
         

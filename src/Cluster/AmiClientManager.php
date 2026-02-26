@@ -7,12 +7,14 @@ namespace Apn\AmiClient\Cluster;
 use Apn\AmiClient\Cluster\Contracts\RoutingStrategyInterface;
 use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
+use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Apn\AmiClient\Core\EventFilter;
 use Apn\AmiClient\Core\EventQueue;
 use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
 use Apn\AmiClient\Core\Logger;
+use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Core\SecretRedactor;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
@@ -45,14 +47,17 @@ class AmiClientManager
 
     private int $connectAttemptsThisTick = 0;
     private int $reconnectCursor = 0;
+    private readonly MetricsCollectorInterface $metrics;
 
     public function __construct(
         private readonly ServerRegistry $registry = new ServerRegistry(),
         private readonly ClientOptions $options = new ClientOptions(),
         ?LoggerInterface $logger = null,
-        ?Reactor $reactor = null
+        ?Reactor $reactor = null,
+        ?MetricsCollectorInterface $metrics = null
     ) {
         $this->reactor = $reactor ?? new Reactor();
+        $this->metrics = $metrics ?? new NullMetricsCollector();
         $this->logger = $logger ?? new Logger(new SecretRedactor(
             $this->options->redactionKeys,
             $this->options->redactionKeyPatterns
@@ -343,21 +348,21 @@ class AmiClientManager
             $config->port,
             $options->connectTimeout,
             $options->writeBufferLimit,
-            $options->maxBytesReadPerTick
+            $options->maxBytesReadPerTick,
+            $options->enforceIpEndpoints
         );
 
         $correlationRegistry = new CorrelationRegistry($options->maxPendingActions);
         $actionIdGenerator = new ActionIdGenerator($config->key, maxActionIdLength: $options->maxActionIdLength);
         $correlation = new CorrelationManager($actionIdGenerator, $correlationRegistry);
 
-        $eventQueue = new EventQueue($options->eventQueueCapacity);
-        $eventFilter = new EventFilter($options->allowedEvents, $options->blockedEvents);
-        $parser = new Parser(maxFrameSize: $options->maxFrameSize);
-
         $labels = [
             'server_key' => $config->key,
             'server_host' => $config->host,
         ];
+        $eventQueue = new EventQueue($options->eventQueueCapacity, $this->metrics, $labels);
+        $eventFilter = new EventFilter($options->allowedEvents, $options->blockedEvents);
+        $parser = new Parser(maxFrameSize: $options->maxFrameSize);
 
         $client = new AmiClient(
             serverKey: $config->key,
@@ -372,12 +377,14 @@ class AmiClientManager
                 circuitFailureThreshold: $options->circuitFailureThreshold,
                 circuitCooldown: (float) $options->circuitCooldown,
                 circuitHalfOpenMaxProbes: $options->circuitHalfOpenMaxProbes,
+                metrics: $this->metrics,
                 logger: $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
                 labels: $labels,
             ),
             eventQueue: $eventQueue,
             eventFilter: $eventFilter,
             logger: $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
+            metrics: $this->metrics,
             host: $config->host,
             port: $config->port,
             maxFramesPerTick: $options->maxFramesPerTick,

@@ -8,8 +8,13 @@ use Apn\AmiClient\Cluster\ClientOptions;
 use Apn\AmiClient\Cluster\ServerConfig;
 use Apn\AmiClient\Cluster\ServerRegistry;
 use Apn\AmiClient\Cluster\AmiClientManager;
+use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
+use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Apn\AmiClient\Events\AmiEvent;
+use Apn\AmiClient\Exceptions\BackpressureException;
+use Apn\AmiClient\Health\HealthStatus;
+use Apn\AmiClient\Protocol\GenericAction;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Transport\Reactor;
 use Psr\Log\NullLogger;
@@ -220,16 +225,9 @@ class AmiClientManagerTest extends TestCase
         $options = new ClientOptions(lazy: false);
         
         // Eager loading will try to connectAll(), which calls open()
-        // We catch the connection exception since there's no server
-        try {
-            $manager = new AmiClientManager($registry, $options);
-        } catch (\Apn\AmiClient\Exceptions\ConnectionException) {
-            // expected failure to connect in test environment
-        }
-        
-        // Since it's not lazy, the client should have been instantiated
-        // We can't easily check without reflection, but we can verify it's there
-        // by calling server() which should return the same instance that failed to open.
+        $manager = new AmiClientManager($registry, $options);
+        $client = $manager->server('node1');
+        $this->assertInstanceOf(AmiClientInterface::class, $client);
     }
 
     public function testDefaultLoggerUsesClientOptionsRedactionPolicy(): void
@@ -258,5 +256,55 @@ class AmiClientManagerTest extends TestCase
         $this->assertSame('********', $decoded['custom_secret']);
         $this->assertSame('********', $decoded['x-auth-header']);
         $this->assertSame('c', $decoded['safe']);
+    }
+
+    public function testInjectedMetricsCollectorIsPropagatedThroughCreateClientStack(): void
+    {
+        $registry = new ServerRegistry();
+        $registry->add(new ServerConfig('node1', '127.0.0.1'));
+
+        $options = new ClientOptions(
+            eventQueueCapacity: 1,
+            maxPendingActions: 0
+        );
+
+        $metrics = new class implements MetricsCollectorInterface {
+            /** @var array<int, array{name: string, labels: array<string, string>, amount: int}> */
+            public array $increments = [];
+            public function increment(string $name, array $labels = [], int $amount = 1): void
+            {
+                $this->increments[] = ['name' => $name, 'labels' => $labels, 'amount' => $amount];
+            }
+            public function record(string $name, float $value, array $labels = []): void {}
+            public function set(string $name, float $value, array $labels = []): void {}
+        };
+
+        $manager = new AmiClientManager(
+            registry: $registry,
+            options: $options,
+            logger: new NullLogger(),
+            metrics: $metrics
+        );
+
+        $client = $manager->server('node1');
+        $this->assertInstanceOf(AmiClient::class, $client);
+
+        $eventQueueRef = new \ReflectionProperty(AmiClient::class, 'eventQueue');
+        /** @var \Apn\AmiClient\Core\EventQueue $eventQueue */
+        $eventQueue = $eventQueueRef->getValue($client);
+        $eventQueue->push(new AmiEvent(new Event(['event' => 'DropTest']), 'node1', microtime(true)));
+        $eventQueue->push(new AmiEvent(new Event(['event' => 'DropTest']), 'node1', microtime(true)));
+
+        $client->getConnectionManager()->setStatus(HealthStatus::READY);
+        try {
+            $client->send(new GenericAction('Ping'));
+            $this->fail('Expected backpressure exception');
+        } catch (BackpressureException) {
+            // expected
+        }
+
+        $metricNames = array_map(static fn (array $row): string => $row['name'], $metrics->increments);
+        $this->assertContains('ami_dropped_events_total', $metricNames);
+        $this->assertContains('ami_write_buffer_backpressure_events_total', $metricNames);
     }
 }

@@ -14,6 +14,7 @@ use Apn\AmiClient\Exceptions\AmiTimeoutException;
 use Apn\AmiClient\Exceptions\ConnectionLostException;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\MissingResponseException;
+use Apn\AmiClient\Exceptions\ProtocolException;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
 use PHPUnit\Framework\TestCase;
@@ -279,6 +280,56 @@ class CorrelationRegistryTest extends TestCase
         
         $this->expectException(\InvalidArgumentException::class);
         $registry->register($action);
+    }
+
+    public function test_rollback_rejects_and_removes_pending_action(): void
+    {
+        $registry = new CorrelationRegistry();
+        $action = $this->createMockAction('rollback:1', new SingleResponseStrategy());
+        $pending = $registry->register($action);
+
+        $captured = null;
+        $pending->onComplete(function ($e) use (&$captured) {
+            $captured = $e;
+        });
+
+        $rolledBack = $registry->rollback('rollback:1', new ProtocolException('send failed'));
+
+        $this->assertTrue($rolledBack);
+        $this->assertInstanceOf(ProtocolException::class, $captured);
+        $this->assertSame(0, $registry->count());
+    }
+
+    public function test_callback_exception_handler_receives_callback_failures_and_other_callbacks_continue(): void
+    {
+        $reported = [];
+        $registry = new CorrelationRegistry(
+            callbackExceptionHandler: function (string $callbackIdentity, \Throwable $e, Action $action) use (&$reported): void {
+                $reported[] = [
+                    'callback' => $callbackIdentity,
+                    'exception' => $e::class,
+                    'action' => $action->getActionName(),
+                ];
+            }
+        );
+
+        $action = $this->createMockAction('cb:1', new SingleResponseStrategy());
+        $pending = $registry->register($action);
+
+        $completed = false;
+        $pending->onComplete(function (): void {
+            throw new \RuntimeException('boom');
+        });
+        $pending->onComplete(function (?Throwable $e, ?Response $r) use (&$completed): void {
+            $completed = $e === null && $r?->isSuccess() === true;
+        });
+
+        $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'cb:1']));
+
+        $this->assertTrue($completed);
+        $this->assertCount(1, $reported);
+        $this->assertStringEndsWith('RuntimeException', $reported[0]['exception']);
+        $this->assertSame('Mock', $reported[0]['action']);
     }
 
     private function createMockAction(string $actionId, \Apn\AmiClient\Core\Contracts\CompletionStrategyInterface $strategy): Action

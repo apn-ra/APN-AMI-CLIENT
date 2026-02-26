@@ -21,6 +21,8 @@ use Apn\AmiClient\Core\EventQueue;
 use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
+use Apn\AmiClient\Exceptions\ActionSendFailedException;
+use Apn\AmiClient\Exceptions\BackpressureException;
 use Psr\Log\AbstractLogger;
 
 class AmiClientTest extends TestCase
@@ -267,6 +269,93 @@ class AmiClientTest extends TestCase
         $this->assertEquals(2, $anyCalls);
     }
 
+    public function testPendingCallbackExceptionsAreIsolatedAndDoNotBreakSubsequentActions(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public array $records = [];
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->records[] = [
+                    'level' => $level,
+                    'message' => (string) $message,
+                    'context' => $context,
+                ];
+            }
+        };
+
+        $metrics = $this->createMock(MetricsCollectorInterface::class);
+        $metrics->expects($this->once())
+            ->method('increment')
+            ->with(
+                'ami_callback_exceptions_total',
+                $this->callback(function (array $labels): bool {
+                    return isset($labels['server_key'], $labels['server_host'], $labels['action'])
+                        && $labels['server_key'] === 'node1'
+                        && $labels['server_host'] === 'localhost'
+                        && $labels['action'] === 'Ping';
+                })
+            );
+
+        $transport = $this->createMock(TransportInterface::class);
+        $onDataCallback = null;
+        $transport->method('onData')->willReturnCallback(function ($callback) use (&$onDataCallback): void {
+            $onDataCallback = $callback;
+        });
+        $transport->method('isConnected')->willReturn(true);
+        $transport->method('send')->willReturnCallback(static function (): void {});
+
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $cm = new \Apn\AmiClient\Health\ConnectionManager();
+        $cm->setStatus(HealthStatus::READY);
+
+        $client = new AmiClient('node1', $transport, $correlation, null, $cm, logger: $logger, metrics: $metrics, host: 'localhost');
+
+        $firstResolved = false;
+        $secondResolved = false;
+
+        $first = $client->send(new GenericAction('Ping'));
+        $first->onComplete(function () {
+            throw new \RuntimeException('callback boom');
+        });
+        $first->onComplete(function (?Throwable $e, ?Response $r) use (&$firstResolved): void {
+            if ($e === null && $r?->isSuccess() === true) {
+                $firstResolved = true;
+            }
+        });
+
+        $second = $client->send(new GenericAction('Ping'));
+        $second->onComplete(function (?Throwable $e, ?Response $r) use (&$secondResolved): void {
+            if ($e === null && $r?->isSuccess() === true) {
+                $secondResolved = true;
+            }
+        });
+
+        $firstActionId = $first->getAction()->getActionId();
+        $secondActionId = $second->getAction()->getActionId();
+
+        $onDataCallback(
+            "Response: Success\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Response: Success\r\nActionID: {$secondActionId}\r\n\r\n"
+        );
+        $client->processTick();
+
+        $this->assertTrue($firstResolved);
+        $this->assertTrue($secondResolved);
+        $this->assertSame(HealthStatus::READY, $client->getHealthStatus());
+
+        $errorLog = null;
+        foreach ($logger->records as $record) {
+            if ($record['message'] === 'Pending action callback failed') {
+                $errorLog = $record;
+                break;
+            }
+        }
+
+        $this->assertNotNull($errorLog);
+        $this->assertSame('node1', $errorLog['context']['server_key']);
+        $this->assertSame('Ping', $errorLog['context']['action_name']);
+    }
+
     public function testSendFailsFastWhenNotReady(): void
     {
         $transport = $this->createMock(TransportInterface::class);
@@ -335,6 +424,41 @@ class AmiClientTest extends TestCase
         $this->assertEquals('Action rejected due to backpressure', $record['message']);
         $this->assertArrayHasKey('queue_depth', $record['context']);
         $this->assertArrayHasKey('queue_type', $record['context']);
+    }
+
+    public function testSendRollsBackPendingActionWhenTransportSendFails(): void
+    {
+        $transport = $this->createMock(TransportInterface::class);
+        $registry = new CorrelationRegistry();
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), $registry);
+        $cm = new \Apn\AmiClient\Health\ConnectionManager();
+        $cm->setStatus(HealthStatus::READY);
+
+        $transport->expects($this->once())
+            ->method('send')
+            ->willThrowException(new BackpressureException('write buffer full'));
+
+        $transport->method('getPendingWriteBytes')->willReturn(1024);
+
+        $client = new AmiClient('node1', $transport, $correlation, null, $cm);
+
+        try {
+            $client->send(new GenericAction('Ping'));
+            $this->fail('Expected ActionSendFailedException');
+        } catch (ActionSendFailedException $e) {
+            $this->assertSame('node1', $e->getServerKey());
+            $this->assertSame('Ping', $e->getActionName());
+            $this->assertNotSame('', $e->getActionId());
+            $this->assertInstanceOf(BackpressureException::class, $e->getPrevious());
+        }
+
+        // No orphan pending action remains after send failure.
+        $this->assertSame(0, $correlation->count());
+
+        // No false timeout noise should appear after rollback.
+        usleep(2000);
+        $correlation->sweep();
+        $this->assertSame(0, $correlation->count());
     }
 
     public function testEventDropLogIncludesNormalizedQueueFields(): void
@@ -435,20 +559,89 @@ class AmiClientTest extends TestCase
 
     public function testCloseSendsLogoff(): void
     {
-        $transport = $this->createMock(TransportInterface::class);
+        $transport = new class implements TransportInterface {
+            public bool $connected = true;
+            public int $closeCalls = 0;
+            public int $sendCalls = 0;
+            public array $sentPayloads = [];
+            private int $pendingBytes = 0;
+            private $callback = null;
+
+            public function open(): void {}
+            public function close(): void { $this->closeCalls++; $this->connected = false; }
+            public function send(string $data): void { $this->sendCalls++; $this->sentPayloads[] = $data; }
+            public function tick(int $timeoutMs = 0): void {}
+            public function onData(callable $callback): void { $this->callback = $callback; }
+            public function isConnected(): bool { return $this->connected; }
+            public function getPendingWriteBytes(): int { return $this->pendingBytes; }
+            public function terminate(): void { $this->close(); }
+            public function setPendingWriteBytes(int $bytes): void { $this->pendingBytes = $bytes; }
+        };
         $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
-        
+
         $client = new AmiClient('node1', $transport, $correlation);
-        
-        $transport->method('isConnected')->willReturn(true);
-        
-        // We expect transport to receive the Logoff action string
-        $transport->expects($this->once())
-            ->method('send')
-            ->with($this->stringContains('Action: Logoff'));
-            
-        $transport->expects($this->once())->method('close');
-        
+
+        $transport->setPendingWriteBytes(10);
         $client->close();
+
+        $this->assertSame(1, $transport->sendCalls);
+        $this->assertStringContainsString('Action: Logoff', $transport->sentPayloads[0]);
+        $this->assertSame(0, $transport->closeCalls);
+
+        $client->processTick();
+        $this->assertSame(0, $transport->closeCalls);
+
+        $transport->setPendingWriteBytes(0);
+        $client->processTick();
+        $this->assertSame(1, $transport->closeCalls);
+    }
+
+    public function testCloseLogsStructuredTelemetryWhenLogoffEnqueueFails(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public array $records = [];
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->records[] = [
+                    'level' => $level,
+                    'message' => (string) $message,
+                    'context' => $context,
+                ];
+            }
+        };
+
+        $transport = new class implements TransportInterface {
+            public bool $connected = true;
+            public int $closeCalls = 0;
+            private int $pendingBytes = 0;
+            public function open(): void {}
+            public function close(): void { $this->closeCalls++; $this->connected = false; }
+            public function send(string $data): void { throw new \RuntimeException('logoff send failed'); }
+            public function tick(int $timeoutMs = 0): void {}
+            public function onData(callable $callback): void {}
+            public function isConnected(): bool { return $this->connected; }
+            public function getPendingWriteBytes(): int { return $this->pendingBytes; }
+            public function terminate(): void { $this->close(); }
+        };
+
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $client = new AmiClient('node1', $transport, $correlation, logger: $logger);
+
+        $client->close();
+
+        $record = null;
+        foreach ($logger->records as $candidate) {
+            if ($candidate['message'] === 'Graceful logoff enqueue failed during shutdown') {
+                $record = $candidate;
+                break;
+            }
+        }
+
+        $this->assertNotNull($record);
+        $this->assertSame('warning', $record['level']);
+        $this->assertSame('node1', $record['context']['server_key']);
+        $this->assertSame('shutdown_logoff_enqueue_failed', $record['context']['reason']);
+        $this->assertSame(\RuntimeException::class, $record['context']['exception_class']);
+        $this->assertSame('logoff send failed', $record['context']['exception']);
     }
 }

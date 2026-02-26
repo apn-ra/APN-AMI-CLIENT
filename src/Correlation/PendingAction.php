@@ -21,14 +21,18 @@ final class PendingAction
     private ?Throwable $exception = null;
     /** @var array<callable(Throwable|null, Response|null, Event[]): void> */
     private array $callbacks = [];
+    /** @var callable(string, Throwable, Action): void|null */
+    private $callbackExceptionHandler = null;
 
     private readonly float $createdAt;
 
     public function __construct(
         private readonly Action $action,
-        private readonly float $timeoutAt
+        private readonly float $timeoutAt,
+        ?callable $callbackExceptionHandler = null
     ) {
         $this->createdAt = microtime(true);
+        $this->callbackExceptionHandler = $callbackExceptionHandler;
     }
 
     /**
@@ -93,7 +97,7 @@ final class PendingAction
     public function onComplete(callable $callback): self
     {
         if ($this->isFinished()) {
-            $callback($this->exception, $this->response, $this->events);
+            $this->invokeCallback($callback);
         } else {
             $this->callbacks[] = $callback;
         }
@@ -114,8 +118,48 @@ final class PendingAction
     private function notify(): void
     {
         foreach ($this->callbacks as $callback) {
-            $callback($this->exception, $this->response, $this->events);
+            $this->invokeCallback($callback);
         }
         $this->callbacks = [];
+    }
+
+    /**
+     * @param callable(Throwable|null, Response|null, Event[]): void $callback
+     */
+    private function invokeCallback(callable $callback): void
+    {
+        try {
+            $callback($this->exception, $this->response, $this->events);
+        } catch (Throwable $e) {
+            if ($this->callbackExceptionHandler !== null) {
+                try {
+                    ($this->callbackExceptionHandler)($this->callbackIdentity($callback), $e, $this->action);
+                } catch (Throwable) {
+                    // Never allow reporting failures to escape into tick/correlation flow.
+                }
+            }
+        }
+    }
+
+    private function callbackIdentity(callable $callback): string
+    {
+        if ($callback instanceof \Closure) {
+            return 'closure';
+        }
+
+        if (is_array($callback) && count($callback) === 2) {
+            $target = is_object($callback[0]) ? $callback[0]::class : (string) $callback[0];
+            return sprintf('%s::%s', $target, (string) $callback[1]);
+        }
+
+        if (is_string($callback)) {
+            return $callback;
+        }
+
+        if (is_object($callback)) {
+            return $callback::class;
+        }
+
+        return 'callable';
     }
 }

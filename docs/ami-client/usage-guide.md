@@ -77,6 +77,8 @@ return [
         'redaction_key_patterns' => [],
         // Max ActionID length (bounded internally to 64..256).
         'max_action_id_length' => 128,
+        // Production policy: require literal IP endpoints to avoid DNS in connect/tick hot paths.
+        'enforce_ip_endpoints' => false,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,
@@ -367,6 +369,7 @@ If a `MetricsCollector` is configured, the following metrics are tracked:
 
 - **No Blocking in Listeners**: Never use `sleep()` or perform blocking I/O inside an `onEvent` callback.
 - **Bounded Queues**: Always configure `event_queue_capacity` and `write_buffer_limit` to prevent OOM.
+- **Endpoint Policy**: In production, set `enforce_ip_endpoints=true` or pre-resolve hostnames during bootstrap.
 - **Health Validation**: Check `Ami::server('node_1')->getHealthStatus()->isAvailable()` before dispatching critical actions.
 - **Secret Redaction**: The package automatically masks `Secret` and `Password` in logs. Avoid logging sensitive `Variable` values manually.
 

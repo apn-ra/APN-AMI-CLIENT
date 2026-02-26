@@ -108,6 +108,8 @@ class FloodControlTest extends TestCase
             $transport,
             $correlation
         );
+        $transport->method('isConnected')->willReturn(true);
+        $client->processTick();
         
         $action1 = new \Apn\AmiClient\Protocol\GenericAction('Action1');
         $action2 = new \Apn\AmiClient\Protocol\GenericAction('Action2');
