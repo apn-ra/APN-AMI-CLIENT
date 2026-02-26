@@ -18,6 +18,7 @@ use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Core\SecretRedactor;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
 use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Transport\Reactor;
 use Apn\AmiClient\Transport\TcpTransport;
@@ -48,6 +49,10 @@ class AmiClientManager
     private int $connectAttemptsThisTick = 0;
     private int $reconnectCursor = 0;
     private readonly MetricsCollectorInterface $metrics;
+    /** @var array<string, string> */
+    private array $resolvedHostsByKey = [];
+    /** @var array<string, string> */
+    private array $resolvedHostCache = [];
 
     public function __construct(
         private readonly ServerRegistry $registry = new ServerRegistry(),
@@ -60,8 +65,15 @@ class AmiClientManager
         $this->metrics = $metrics ?? new NullMetricsCollector();
         $this->logger = $logger ?? new Logger(new SecretRedactor(
             $this->options->redactionKeys,
-            $this->options->redactionKeyPatterns
+            $this->options->redactionKeyPatterns,
+            $this->options->redactionValuePatterns
         ));
+
+        foreach ($this->registry->all() as $config) {
+            $options = $config->options ?? $this->options;
+            $this->validateHostnamePolicy($config, $options);
+            $this->resolvedHostsByKey[$config->key] = $this->resolveHost($config, $options);
+        }
 
         if (!$this->options->lazy) {
             $this->connectAll();
@@ -165,6 +177,14 @@ class AmiClientManager
     }
 
     /**
+     * Alias for tick($serverKey, 0).
+     */
+    public function poll(string $serverKey): void
+    {
+        $this->tick($serverKey, 0);
+    }
+
+    /**
      * Iterates through all active server connections and executes their tick() logic.
      * Guideline 2: Stream Select Ownership.
      */
@@ -215,6 +235,14 @@ class AmiClientManager
                 ]);
             }
         }
+    }
+
+    /**
+     * Alias for tickAll(0).
+     */
+    public function pollAll(): void
+    {
+        $this->tickAll(0);
     }
 
     /**
@@ -342,9 +370,10 @@ class AmiClientManager
     private function createClient(ServerConfig $config): AmiClientInterface
     {
         $options = $config->options ?? $this->options;
+        $this->validateHostnamePolicy($config, $options);
 
         $transport = new TcpTransport(
-            $config->host,
+            $this->resolvedHostsByKey[$config->key] ?? $this->resolveHost($config, $options),
             $config->port,
             $options->connectTimeout,
             $options->writeBufferLimit,
@@ -352,14 +381,19 @@ class AmiClientManager
             $options->enforceIpEndpoints
         );
 
-        $correlationRegistry = new CorrelationRegistry($options->maxPendingActions);
-        $actionIdGenerator = new ActionIdGenerator($config->key, maxActionIdLength: $options->maxActionIdLength);
-        $correlation = new CorrelationManager($actionIdGenerator, $correlationRegistry);
-
         $labels = [
             'server_key' => $config->key,
             'server_host' => $config->host,
         ];
+        
+        $correlationRegistry = new CorrelationRegistry(
+            maxPending: $options->maxPendingActions,
+            logger: $this->logger instanceof Logger ? $this->logger->withServerKey($config->key) : $this->logger,
+            metrics: $this->metrics,
+            labels: $labels
+        );
+        $actionIdGenerator = new ActionIdGenerator($config->key, maxActionIdLength: $options->maxActionIdLength);
+        $correlation = new CorrelationManager($actionIdGenerator, $correlationRegistry);
         $eventQueue = new EventQueue($options->eventQueueCapacity, $this->metrics, $labels);
         $eventFilter = new EventFilter($options->allowedEvents, $options->blockedEvents);
         $parser = new Parser(maxFrameSize: $options->maxFrameSize);
@@ -405,6 +439,55 @@ class AmiClientManager
         }
 
         return $client;
+    }
+
+    private function resolveHost(ServerConfig $config, ClientOptions $options): string
+    {
+        if (filter_var($config->host, FILTER_VALIDATE_IP) !== false) {
+            return $config->host;
+        }
+
+        if ($options->enforceIpEndpoints) {
+            throw new InvalidConfigurationException(sprintf(
+                'Invalid server "%s": host "%s" is not a literal IP while enforce_ip_endpoints is enabled.',
+                $config->key,
+                $config->host
+            ));
+        }
+
+        if (isset($this->resolvedHostCache[$config->host])) {
+            return $this->resolvedHostCache[$config->host];
+        }
+
+        $resolved = gethostbyname($config->host);
+        if ($resolved === $config->host || filter_var($resolved, FILTER_VALIDATE_IP) === false) {
+            throw new InvalidConfigurationException(sprintf(
+                'Invalid server "%s": host "%s" could not be resolved to an IP during bootstrap.',
+                $config->key,
+                $config->host
+            ));
+        }
+
+        $this->resolvedHostCache[$config->host] = $resolved;
+        return $resolved;
+    }
+
+    private function validateHostnamePolicy(ServerConfig $config, ?ClientOptions $resolvedOptions = null): void
+    {
+        $options = $resolvedOptions ?? ($config->options ?? $this->options);
+        if (!$options->enforceIpEndpoints) {
+            return;
+        }
+
+        if (filter_var($config->host, FILTER_VALIDATE_IP) !== false) {
+            return;
+        }
+
+        throw new InvalidConfigurationException(sprintf(
+            'Invalid server "%s": host "%s" is not a literal IP while enforce_ip_endpoints is enabled.',
+            $config->key,
+            $config->host
+        ));
     }
 
     /**

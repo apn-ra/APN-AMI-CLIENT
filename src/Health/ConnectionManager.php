@@ -136,10 +136,19 @@ class ConnectionManager
         $this->consecutiveHeartbeatFailures++;
         
         if ($this->consecutiveHeartbeatFailures >= $this->maxHeartbeatFailures) {
+            // signal forced closure via shouldForceClose()
             $this->setStatus(HealthStatus::DISCONNECTED);
         } elseif ($this->status === HealthStatus::READY) {
             $this->setStatus(HealthStatus::READY_DEGRADED);
         }
+    }
+
+    /**
+     * Returns true if the connection must be force-closed (e.g., heartbeat failure).
+     */
+    public function shouldForceClose(): bool
+    {
+        return $this->consecutiveHeartbeatFailures >= $this->maxHeartbeatFailures;
     }
 
     public function recordLoginAttempt(): void
@@ -359,6 +368,11 @@ class ConnectionManager
     public function getReconnectAttempts(): int
     {
         return $this->reconnectAttempts;
+    }
+
+    public function getConsecutiveHeartbeatFailures(): int
+    {
+        return $this->consecutiveHeartbeatFailures;
     }
 
     public function getCircuitState(): CircuitState

@@ -14,7 +14,7 @@ class ListenCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'ami:listen {--server= : The server key to listen to} {--all : Listen to all configured servers}';
+    protected $signature = 'ami:listen {--server= : The server key to listen to} {--all : Listen to all configured servers} {--once : Run a single loop iteration}';
 
     /**
      * The console command description.
@@ -40,11 +40,19 @@ class ListenCommand extends Command
 
         $manager->registerSignalHandlers();
 
+        $runOnce = (bool) $this->option('once');
+        $iterations = 0;
+
         while (true) {
             if ($all) {
-                $manager->tickAll(100);
+                $manager->pollAll();
             } else {
-                $manager->tick($server, 100);
+                $manager->poll($server);
+            }
+
+            $iterations++;
+            if ($runOnce && $iterations >= 1) {
+                return 0;
             }
         }
 

@@ -32,7 +32,8 @@ class Reactor
     /**
      * Perform one tick of I/O multiplexing for all registered transports.
      *
-     * @param int $timeoutMs Timeout for stream_select in milliseconds.
+     * @param int $timeoutMs Timeout for stream_select in milliseconds. 
+     *                       Use 0 for non-blocking production loops (Guideline 2).
      */
     public function tick(int $timeoutMs = 0): void
     {

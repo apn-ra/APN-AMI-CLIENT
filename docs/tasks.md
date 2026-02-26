@@ -140,3 +140,60 @@
 
 ### Phase P3
 1. [x] PR3-P3-01 (BATCH-PR-20260226-03) Replace shutdown/logoff swallow with structured debug/warn telemetry. Severity: P3. Targets: `src/Core/AmiClient.php` logoff/close exception handling. Plan ref: Delta 2026-02-26 (BATCH-PR-20260226-03): Non-Blocking Shutdown + Correlation Transactionality + Callback Isolation + Metrics Wiring. Acceptance: swallow paths log structured context (server_key, reason, exception class/message where safe). Tests: optional (if logging tests exist); otherwise verify via code-level assertions / documented behavior.
+
+
+## Append: BATCH-PR-20260226-04
+
+### Phase P1 (High)
+- [x] PR4-P1-01 (BATCH-PR-20260226-04) Enforce non-blocking hostname policy for reconnect paths. Severity: P1. Targets: `src/Transport/TcpTransport.php`, `src/Core/AmiClient.php`, `src/Core/ClientOptions.php`, `config/*`. Acceptance criteria:
+- Enforce IP-only endpoints in production mode or pre-resolve hostnames at bootstrap; no blocking DNS calls occur inside tick/reconnect paths.
+- If hostnames are allowed, resolution is cached and performed outside tick, and reconnect path uses only pre-resolved IPs.
+- Configuration validation fails fast when hostname endpoints are supplied while IP-only mode is enforced.
+Required tests to add:
+- PHPUnit: configuration policy test that rejects hostname endpoints when IP-only mode is enabled. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop fully non-blocking (no DNS/blocking I/O inside tick/reconnect paths).
+
+- [x] PR4-P1-02 (BATCH-PR-20260226-04) Add deterministic non-blocking verification test for reconnect with hostnames. Severity: P1. Targets: `tests/Integration/*`, `tests/Unit/*`. Acceptance criteria:
+- Test simulates a hostname endpoint with blocked DNS resolution or delayed resolution and verifies tick loop continues to service other nodes.
+- Test asserts no blocking call is made inside tick by verifying a bounded max tick duration under forced reconnect.
+Required tests to add:
+- PHPUnit integration test: hostname reconnect path does not block tick; other node continues read/write. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Tick loop fully non-blocking (no DNS/blocking I/O inside tick/reconnect paths).
+
+### Phase P2 (Medium)
+- [x] PR4-P2-01 (BATCH-PR-20260226-04) Verify async connect success when socket helpers are unavailable. Severity: P2. Targets: `src/Transport/TcpTransport.php`. Acceptance criteria:
+- When ext-sockets helpers are unavailable, async connect success is verified via a portable fallback check.
+- If verification cannot be performed, connection is treated as failed and socket is closed.
+- Connection state does not transition to connected on unverified async connect.
+Required tests to add:
+- PHPUnit unit test: simulate absence of socket helpers and assert connect does not report success without verification. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Connection state only transitions to connected after verified async-connect success.
+
+- [x] PR4-P2-02 (BATCH-PR-20260226-04) Add async-connect fallback tests for false-positive prevention. Severity: P2. Targets: `tests/Unit/Transport/*`, `tests/Integration/*`. Acceptance criteria:
+- Test covers fallback verification path using stream metadata and non-blocking write probe.
+- Test asserts that failed verification yields immediate failure and reconnect scheduling.
+Required tests to add:
+- PHPUnit unit test: fallback verification failure does not mark connected. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- No synthetic connected state when verification fails or is unavailable.
+
+### Phase P3 (Low)
+- [x] PR4-P3-01 (BATCH-PR-20260226-04) Add configurable value-based redaction and apply before logging payloads. Severity: P3. Targets: `src/Core/SecretRedactor.php`, `src/Core/Logger.php`, `src/Core/AmiClient.php`, `src/Core/ClientOptions.php`, `config/*`. Acceptance criteria:
+- Redactor supports configurable regex-based value patterns in addition to key-based redaction.
+- Action/event payloads are passed through value-based redactor before logging structured context.
+- Defaults are safe and do not remove non-secret values.
+Required tests to add:
+- PHPUnit unit test: value-based regex redacts secrets embedded in free-form strings. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Logs must not expose secrets embedded in values.
+
+- [x] PR4-P3-02 (BATCH-PR-20260226-04) Add nested-context value redaction coverage. Severity: P3. Targets: `tests/Unit/Core/*`, `tests/Unit/Logging/*`. Acceptance criteria:
+- Redaction applies to nested arrays and mixed key/value contexts.
+- Non-secret values remain unchanged.
+Required tests to add:
+- PHPUnit unit test: nested context arrays with embedded secrets are redacted. Run with `vendor/bin/phpunit`.
+Invariants that must remain true:
+- Logs must not expose secrets embedded in values.

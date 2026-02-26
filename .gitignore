@@ -31,3 +31,5 @@ auth.json
 .vscode/
 .idea
 docs/prompts/*
+.codex/*
+AGENTS.md

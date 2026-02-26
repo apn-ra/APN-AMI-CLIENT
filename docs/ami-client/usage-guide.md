@@ -78,7 +78,7 @@ return [
         // Max ActionID length (bounded internally to 64..256).
         'max_action_id_length' => 128,
         // Production policy: require literal IP endpoints to avoid DNS in connect/tick hot paths.
-        'enforce_ip_endpoints' => false,
+        'enforce_ip_endpoints' => true,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,
@@ -179,6 +179,13 @@ while (true) {
 }
 ```
 
+#### `poll()` vs `tick($timeoutMs)`
+
+- `Ami::tick(timeoutMs)`: Blocks for up to `$timeoutMs` milliseconds waiting for socket activity via `stream_select`. Use this in simple loops where the AMI client is the primary work.
+- `Ami::poll()`: Equivalent to `tick(0)`. It performs a non-blocking check for I/O and internal state updates (timeouts, health). Use this if your application already has its own reactor or if you need a truly zero-wait loop.
+
+For high-performance production loops, `Ami::poll()` (or `tick(0)`) is recommended to ensure deterministic timing.
+
 ---
 
 ## 6. Originate Example (Async Completion)
@@ -208,7 +215,8 @@ try {
         }
     });
 } catch (AmiTimeoutException $e) {
-    // This could be thrown if the write queue is full and a timeout is triggered
+    // This could be thrown if the write queue is full and a timeout is triggered.
+    // Also thrown if 'max_pending_actions' or 'max_messages' per strategy is exceeded.
 }
 ```
 
@@ -369,7 +377,7 @@ If a `MetricsCollector` is configured, the following metrics are tracked:
 
 - **No Blocking in Listeners**: Never use `sleep()` or perform blocking I/O inside an `onEvent` callback.
 - **Bounded Queues**: Always configure `event_queue_capacity` and `write_buffer_limit` to prevent OOM.
-- **Endpoint Policy**: In production, set `enforce_ip_endpoints=true` or pre-resolve hostnames during bootstrap.
+- **Endpoint Policy**: In production, set `enforce_ip_endpoints=true` (the default). This prevents the worker from blocking on DNS resolution during connection or reconnection attempts, ensuring the deterministic tick loop remains responsive.
 - **Health Validation**: Check `Ami::server('node_1')->getHealthStatus()->isAvailable()` before dispatching critical actions.
 - **Secret Redaction**: The package automatically masks `Secret` and `Password` in logs. Avoid logging sensitive `Variable` values manually.
 

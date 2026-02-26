@@ -53,5 +53,23 @@ final class LoggerRedactionTest extends TestCase
         $this->assertSame('********', $decoded['private_key_path']);
         $this->assertSame('keep', $decoded['normal']);
     }
-}
 
+    public function test_logger_redacts_value_based_patterns(): void
+    {
+        $logger = new Logger(new SecretRedactor());
+
+        ob_start();
+        $logger->warning('redaction', [
+            'note' => 'token=abc123; user=me',
+            'header' => 'Authorization: Bearer abc.def.ghi',
+            'safe' => 'ok',
+        ]);
+        $output = ob_get_clean();
+
+        $decoded = json_decode((string) $output, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame('********; user=me', $decoded['note']);
+        $this->assertSame('Authorization: ********', $decoded['header']);
+        $this->assertSame('ok', $decoded['safe']);
+    }
+}

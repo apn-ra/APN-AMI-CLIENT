@@ -310,6 +310,14 @@ class AmiClient implements AmiClientInterface
     }
 
     /**
+     * @inheritDoc
+     */
+    public function poll(): void
+    {
+        $this->tick(0);
+    }
+
+    /**
      * Resets tick-based budgets.
      */
     public function resetTickBudgets(): void
@@ -354,6 +362,15 @@ class AmiClient implements AmiClientInterface
 
         // 2. Correlation Timeout Sweeps (Guideline 2 & 4)
         $this->correlation->sweep();
+
+        if ($this->connectionManager->shouldForceClose()) {
+            $this->logger->warning('Max heartbeat failures reached, force-closing connection', [
+                'server_key' => $this->serverKey,
+                'consecutive_failures' => $this->connectionManager->getConsecutiveHeartbeatFailures(),
+            ]);
+            $this->forceClose('Max heartbeat failures');
+            return false;
+        }
 
         // 3. State management & Authentication State Machine (Phase 4)
         if (!$this->transport->isConnected()) {
@@ -565,7 +582,9 @@ class AmiClient implements AmiClientInterface
     private function ping(): void
     {
         $this->connectionManager->recordHeartbeatSent();
-        $action = new Ping();
+        $action = new Ping(strategy: new \Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy(
+            maxDurationMs: (int)($this->readTimeout * 1000)
+        ));
         $this->sendInternal($action)->onComplete(function (?Throwable $e, ?Response $r) {
             if ($e === null && $r !== null && $r->isSuccess()) {
                 $this->connectionManager->recordHeartbeatSuccess();

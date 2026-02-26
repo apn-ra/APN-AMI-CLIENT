@@ -20,13 +20,13 @@ $config = [
     'default' => 'node1',
     'servers' => [
         'node1' => [
-            'host' => '127.0.0.1',
+            'host' => '127.0.0.1', // Use IP address to avoid blocking DNS resolution
             'port' => 5038,
             'username' => 'admin',
             'secret' => 'secret',
         ],
         'node2' => [
-            'host' => '192.168.1.10',
+            'host' => '192.168.1.10', // Use IP address to avoid blocking DNS resolution
             'port' => 5038,
             'username' => 'admin',
             'secret' => 'secret',

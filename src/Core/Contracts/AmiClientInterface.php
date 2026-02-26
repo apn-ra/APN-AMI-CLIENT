@@ -52,6 +52,12 @@ interface AmiClientInterface
      * @param int $timeoutMs
      */
     public function tick(int $timeoutMs = 0): void;
+    
+    /**
+     * Alias for tick(0). Explicitly non-blocking poll for I/O and protocol events.
+     * Recommended for production event loops (Guideline 2).
+     */
+    public function poll(): void;
 
     /**
      * Performs internal processing (timeouts, health) without I/O multiplexing.

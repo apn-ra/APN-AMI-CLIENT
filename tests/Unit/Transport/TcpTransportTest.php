@@ -85,6 +85,15 @@ class TcpTransportTest extends TestCase
         }
     }
 
+    public function testRejectsHostnameByPolicyByDefault(): void
+    {
+        $transport = new TcpTransport('localhost', $this->port);
+
+        $this->expectException(ConnectionException::class);
+        $this->expectExceptionMessage('Hostname endpoints are disabled by policy');
+        $transport->open();
+    }
+
     public function testRejectsHostnameWhenIpPolicyIsEnabled(): void
     {
         $transport = new TcpTransport('localhost', $this->port, enforceIpEndpoints: true);
@@ -112,6 +121,128 @@ class TcpTransportTest extends TestCase
         }
 
         $this->assertFalse($transport->isConnected());
+    }
+
+    public function testAsyncConnectFallbackSucceedsWithPeerAndProbe(): void
+    {
+        $transport = new class ($this->host, $this->port) extends TcpTransport {
+            protected function socketHelpersAvailable(): bool
+            {
+                return false;
+            }
+
+            protected function getPeerName($resource): string|false
+            {
+                return '127.0.0.1:1234';
+            }
+
+            protected function probeWritable($resource): bool
+            {
+                return true;
+            }
+        };
+
+        $transport->open();
+        $client = $this->awaitConnect($transport);
+
+        $this->assertNotNull($client);
+        $this->assertTrue($transport->isConnected());
+
+        $transport->close();
+
+        if ($client) {
+            fclose($client);
+        }
+    }
+
+    public function testAsyncConnectFailsWithoutVerificationWhenSocketHelpersUnavailable(): void
+    {
+        $transport = new class ($this->host, $this->port) extends TcpTransport {
+            protected function socketHelpersAvailable(): bool
+            {
+                return false;
+            }
+
+            protected function getPeerName($resource): string|false
+            {
+                return false;
+            }
+
+            protected function probeWritable($resource): bool
+            {
+                return true;
+            }
+        };
+
+        $transport->open();
+
+        $client = null;
+        for ($i = 0; $i < 10; $i++) {
+            $transport->tick(10);
+            if ($client === null) {
+                $client = @stream_socket_accept($this->server, 0);
+                if ($client) {
+                    stream_set_blocking($client, false);
+                }
+            }
+            if (!$transport->isConnecting()) {
+                break;
+            }
+            usleep(10000);
+        }
+
+        $this->assertFalse($transport->isConnected());
+        $this->assertFalse($transport->isConnecting());
+        $this->assertNull($transport->getResource());
+
+        if ($client) {
+            fclose($client);
+        }
+    }
+
+    public function testAsyncConnectFailsWhenFallbackProbeFails(): void
+    {
+        $transport = new class ($this->host, $this->port) extends TcpTransport {
+            protected function socketHelpersAvailable(): bool
+            {
+                return false;
+            }
+
+            protected function getPeerName($resource): string|false
+            {
+                return '127.0.0.1:1234';
+            }
+
+            protected function probeWritable($resource): bool
+            {
+                return false;
+            }
+        };
+
+        $transport->open();
+
+        $client = null;
+        for ($i = 0; $i < 10; $i++) {
+            $transport->tick(10);
+            if ($client === null) {
+                $client = @stream_socket_accept($this->server, 0);
+                if ($client) {
+                    stream_set_blocking($client, false);
+                }
+            }
+            if (!$transport->isConnecting()) {
+                break;
+            }
+            usleep(10000);
+        }
+
+        $this->assertFalse($transport->isConnected());
+        $this->assertFalse($transport->isConnecting());
+        $this->assertNull($transport->getResource());
+
+        if ($client) {
+            fclose($client);
+        }
     }
 
     public function testSendAndReceive(): void

@@ -18,7 +18,7 @@ use Apn\AmiClient\Cluster\ConfigLoader;
 $config = [
     'servers' => [
         'node1' => [
-            'host' => '127.0.0.1',
+            'host' => '127.0.0.1', // Use IP address to avoid blocking DNS resolution
             'port' => 5038,
             'username' => 'admin',
             'secret' => 'secret',

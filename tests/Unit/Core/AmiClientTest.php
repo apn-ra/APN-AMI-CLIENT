@@ -37,6 +37,19 @@ class AmiClientTest extends TestCase
         $this->assertEquals('node1', $client->getServerKey());
     }
 
+    public function testPollCallsTickWithZero(): void
+    {
+        $transport = $this->createMock(TransportInterface::class);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        
+        $transport->expects($this->once())
+            ->method('tick')
+            ->with(0);
+
+        $client = new AmiClient('node1', $transport, $correlation);
+        $client->poll();
+    }
+
     public function testGetHealthStatus(): void
     {
         $transport = $this->createMock(TransportInterface::class);
@@ -291,7 +304,7 @@ class AmiClientTest extends TestCase
                 $this->callback(function (array $labels): bool {
                     return isset($labels['server_key'], $labels['server_host'], $labels['action'])
                         && $labels['server_key'] === 'node1'
-                        && $labels['server_host'] === 'localhost'
+                        && $labels['server_host'] === '127.0.0.1'
                         && $labels['action'] === 'Ping';
                 })
             );
@@ -308,7 +321,7 @@ class AmiClientTest extends TestCase
         $cm = new \Apn\AmiClient\Health\ConnectionManager();
         $cm->setStatus(HealthStatus::READY);
 
-        $client = new AmiClient('node1', $transport, $correlation, null, $cm, logger: $logger, metrics: $metrics, host: 'localhost');
+        $client = new AmiClient('node1', $transport, $correlation, null, $cm, logger: $logger, metrics: $metrics, host: '127.0.0.1');
 
         $firstResolved = false;
         $secondResolved = false;
@@ -539,7 +552,7 @@ class AmiClientTest extends TestCase
         
         $cm = new \Apn\AmiClient\Health\ConnectionManager();
         $cm->setStatus(HealthStatus::READY);
-        $client = new AmiClient('node1', $transport, $correlation, null, $cm, metrics: $metrics, host: 'localhost');
+        $client = new AmiClient('node1', $transport, $correlation, null, $cm, metrics: $metrics, host: '127.0.0.1');
         
         // Test latency recording
         $metrics->expects($this->once())
@@ -548,7 +561,7 @@ class AmiClientTest extends TestCase
                 'ami_action_latency_ms',
                 $this->isType('float'),
                 $this->callback(function($labels) {
-                    return $labels['server_key'] === 'node1' && $labels['server_host'] === 'localhost';
+                    return $labels['server_key'] === 'node1' && $labels['server_host'] === '127.0.0.1';
                 })
             );
         

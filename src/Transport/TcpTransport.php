@@ -30,7 +30,7 @@ class TcpTransport implements TransportInterface
         private readonly int $connectTimeout = 30,
         int $writeBufferLimit = 5242880,
         private readonly int $maxBytesReadPerTick = 1048576,
-        private readonly bool $enforceIpEndpoints = false,
+        private readonly bool $enforceIpEndpoints = true,
     ) {
         $this->writeBuffer = new WriteBuffer($writeBufferLimit);
     }
@@ -40,9 +40,14 @@ class TcpTransport implements TransportInterface
      */
     public function open(): void
     {
-        if ($this->enforceIpEndpoints && filter_var($this->host, FILTER_VALIDATE_IP) === false) {
+        $hostIsIp = filter_var($this->host, FILTER_VALIDATE_IP) !== false;
+        if (!$hostIsIp) {
+            $policyPrefix = $this->enforceIpEndpoints
+                ? 'Hostname endpoints are disabled by policy; '
+                : '';
             throw new ConnectionException(sprintf(
-                'Hostname endpoints are disabled by policy; provide an IP for %s:%d or pre-resolve during bootstrap.',
+                '%sHostname endpoints must be pre-resolved outside the tick loop; provide an IP for %s:%d.',
+                $policyPrefix,
                 $this->host,
                 $this->port
             ));
@@ -143,6 +148,8 @@ class TcpTransport implements TransportInterface
 
     /**
      * @inheritDoc
+     * @param int $timeoutMs The stream_select timeout in milliseconds. 
+     *                       Use 0 for non-blocking production loops (Guideline 2).
      */
     public function tick(int $timeoutMs = 0): void
     {
@@ -272,19 +279,17 @@ class TcpTransport implements TransportInterface
             return;
         }
 
-        if (!function_exists('socket_import_stream') || !function_exists('socket_get_option')) {
-            $this->connecting = false;
-            $this->connected = true;
-            return;
-        }
-
-        $socket = @socket_import_stream($this->resource);
-        if ($socket === false) {
+        if (!$this->socketHelpersAvailable()) {
+            if ($this->verifyAsyncConnectFallback()) {
+                $this->connecting = false;
+                $this->connected = true;
+                return;
+            }
             $this->close();
             return;
         }
 
-        $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
+        $error = $this->getSocketError($this->resource);
         if ($error === 0) {
             $this->connecting = false;
             $this->connected = true;
@@ -292,6 +297,76 @@ class TcpTransport implements TransportInterface
         }
 
         $this->close();
+    }
+
+    /**
+     * @return bool True when socket helper functions are available.
+     */
+    protected function socketHelpersAvailable(): bool
+    {
+        return function_exists('socket_import_stream') && function_exists('socket_get_option');
+    }
+
+    /**
+     * @param resource $resource
+     */
+    protected function getSocketError($resource): ?int
+    {
+        $socket = @socket_import_stream($resource);
+        if ($socket === false) {
+            return null;
+        }
+
+        $error = @socket_get_option($socket, SOL_SOCKET, SO_ERROR);
+        if (!is_int($error)) {
+            return null;
+        }
+
+        return $error;
+    }
+
+    /**
+     * Fallback async-connect verification when ext-sockets helpers are unavailable.
+     */
+    protected function verifyAsyncConnectFallback(): bool
+    {
+        if ($this->resource === null || !is_resource($this->resource)) {
+            return false;
+        }
+
+        $meta = stream_get_meta_data($this->resource);
+        if (!is_array($meta)) {
+            return false;
+        }
+
+        if (($meta['timed_out'] ?? false) === true || ($meta['eof'] ?? false) === true) {
+            return false;
+        }
+
+        $peer = $this->getPeerName($this->resource);
+        if ($peer === false || $peer === '') {
+            return false;
+        }
+
+        return $this->probeWritable($this->resource);
+    }
+
+    /**
+     * @param resource $resource
+     * @return string|false
+     */
+    protected function getPeerName($resource): string|false
+    {
+        return @stream_socket_get_name($resource, true);
+    }
+
+    /**
+     * @param resource $resource
+     */
+    protected function probeWritable($resource): bool
+    {
+        $result = @fwrite($resource, '');
+        return $result !== false;
     }
 
     /**

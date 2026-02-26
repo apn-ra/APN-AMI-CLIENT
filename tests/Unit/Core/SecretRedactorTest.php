@@ -113,4 +113,36 @@ class SecretRedactorTest extends TestCase
         $this->assertSame('********', $redacted['x-auth-extra']);
         $this->assertSame('3', $redacted['normal']);
     }
+
+    public function testValueBasedRedactionMasksEmbeddedSecrets(): void
+    {
+        $redacted = $this->redactor->redact([
+            'note' => 'token=abc123; user=me',
+            'header' => 'Authorization: Bearer abc.def.ghi',
+            'safe' => 'no secrets here',
+        ]);
+
+        $this->assertSame('********; user=me', $redacted['note']);
+        $this->assertSame('Authorization: ********', $redacted['header']);
+        $this->assertSame('no secrets here', $redacted['safe']);
+    }
+
+    public function testValueRedactionAppliesToNestedContext(): void
+    {
+        $redacted = $this->redactor->redact([
+            'context' => [
+                'note' => 'password=supersecret; user=me',
+                'safe' => 'ok',
+            ],
+            'list' => [
+                'token=abc',
+                'no secret',
+            ],
+        ]);
+
+        $this->assertSame('********; user=me', $redacted['context']['note']);
+        $this->assertSame('ok', $redacted['context']['safe']);
+        $this->assertSame('********', $redacted['list'][0]);
+        $this->assertSame('no secret', $redacted['list'][1]);
+    }
 }

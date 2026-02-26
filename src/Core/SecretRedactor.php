@@ -35,15 +35,24 @@ class SecretRedactor
         'variable',
     ];
 
+    private const DEFAULT_SENSITIVE_VALUE_PATTERNS = [
+        '/\b(password|secret|token|api_key|apikey)\s*[:=]\s*[^\s,;]+/i',
+        '/\bBearer\s+[A-Za-z0-9\-._~+\/]+=*/i',
+    ];
+
     /** @var string[] */
     private array $sensitiveKeys;
 
     /** @var string[] */
     private array $sensitiveKeyPatterns;
 
+    /** @var string[] */
+    private array $sensitiveValuePatterns;
+
     public function __construct(
         array $additionalSensitiveKeys = [],
         array $additionalSensitiveKeyPatterns = [],
+        array $additionalSensitiveValuePatterns = [],
     ) {
         $normalizedKeys = array_map(
             static fn (mixed $key): string => strtolower(trim((string) $key)),
@@ -54,6 +63,10 @@ class SecretRedactor
         $this->sensitiveKeyPatterns = array_values(array_filter(array_map('strval', array_merge([
             '/(password|secret|token|auth|key)/i',
         ], $additionalSensitiveKeyPatterns))));
+        $this->sensitiveValuePatterns = array_values(array_filter(array_map('strval', array_merge(
+            self::DEFAULT_SENSITIVE_VALUE_PATTERNS,
+            $additionalSensitiveValuePatterns
+        ))));
     }
 
     /**
@@ -69,6 +82,8 @@ class SecretRedactor
                 $data[$key] = $this->redact($value);
             } elseif ($this->isSensitiveKey((string) $key)) {
                 $data[$key] = '********';
+            } elseif (is_string($value)) {
+                $data[$key] = $this->redactValue($value);
             }
         }
 
@@ -94,5 +109,18 @@ class SecretRedactor
         }
 
         return false;
+    }
+
+    private function redactValue(string $value): string
+    {
+        $redacted = $value;
+        foreach ($this->sensitiveValuePatterns as $pattern) {
+            $result = @preg_replace($pattern, '********', $redacted);
+            if (is_string($result)) {
+                $redacted = $result;
+            }
+        }
+
+        return $redacted;
     }
 }

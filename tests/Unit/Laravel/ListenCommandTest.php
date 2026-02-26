@@ -30,54 +30,52 @@ class ListenCommandTest extends TestCase
     {
         $manager = $this->createMock(AmiClientManager::class);
         $manager->expects($this->once())->method('registerSignalHandlers');
-        
-        // We want to test that tickAll is called.
-        // Since it's an infinite loop, we might need a way to break it.
-        // For testing purposes, we can mock tickAll to throw an exception to break the loop.
-        $manager->expects($this->once())
-            ->method('tickAll')
-            ->with(100)
-            ->willThrowException(new \RuntimeException('Break Loop'));
+        $manager->expects($this->once())->method('pollAll');
 
         $command = $this->getMockBuilder(ListenCommand::class)
             ->onlyMethods(['option', 'info'])
             ->getMock();
 
-        $command->method('option')->willReturnCallback(function($key) {
-            return $key === 'all';
+        $command->method('option')->willReturnCallback(function ($key) {
+            if ($key === 'all') {
+                return true;
+            }
+            if ($key === 'once') {
+                return true;
+            }
+            return null;
         });
 
-        try {
-            $command->handle($manager);
-        } catch (\RuntimeException $e) {
-            $this->assertEquals('Break Loop', $e->getMessage());
-        }
+        $result = $command->handle($manager);
+        $this->assertSame(0, $result);
     }
 
     public function testHandleWithServerOption(): void
     {
         $manager = $this->createMock(AmiClientManager::class);
         $manager->expects($this->once())->method('registerSignalHandlers');
-        
         $manager->expects($this->once())
-            ->method('tick')
-            ->with('node1', 100)
-            ->willThrowException(new \RuntimeException('Break Loop'));
+            ->method('poll')
+            ->with('node1');
 
         $command = $this->getMockBuilder(ListenCommand::class)
             ->onlyMethods(['option', 'info'])
             ->getMock();
 
-        $command->method('option')->willReturnCallback(function($key) {
-            if ($key === 'server') return 'node1';
-            if ($key === 'all') return false;
+        $command->method('option')->willReturnCallback(function ($key) {
+            if ($key === 'server') {
+                return 'node1';
+            }
+            if ($key === 'all') {
+                return false;
+            }
+            if ($key === 'once') {
+                return true;
+            }
             return null;
         });
 
-        try {
-            $command->handle($manager);
-        } catch (\RuntimeException $e) {
-            $this->assertEquals('Break Loop', $e->getMessage());
-        }
+        $result = $command->handle($manager);
+        $this->assertSame(0, $result);
     }
 }

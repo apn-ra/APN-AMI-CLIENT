@@ -27,6 +27,8 @@ readonly class ClientOptions
         public array $redactionKeys = [],
         /** @var string[] */
         public array $redactionKeyPatterns = [],
+        /** @var string[] */
+        public array $redactionValuePatterns = [],
         public int $memoryLimit = 0,
         public int $maxFramesPerTick = 1000,
         public int $maxEventsPerTick = 1000,
@@ -34,7 +36,7 @@ readonly class ClientOptions
         public int $maxFrameSize = 1048576, // 1MB
         public int $maxActionIdLength = 128,
         public int $maxConnectAttemptsPerTick = 5,
-        public bool $enforceIpEndpoints = false,
+        public bool $enforceIpEndpoints = true,
         public bool $lazy = true,
     ) {}
 
@@ -57,6 +59,7 @@ readonly class ClientOptions
             blockedEvents: $options['blocked_events'] ?? [],
             redactionKeys: $options['redaction_keys'] ?? [],
             redactionKeyPatterns: $options['redaction_key_patterns'] ?? [],
+            redactionValuePatterns: $options['redaction_value_patterns'] ?? [],
             memoryLimit: $options['memory_limit'] ?? 0,
             maxFramesPerTick: $options['max_frames_per_tick'] ?? 1000,
             maxEventsPerTick: $options['max_events_per_tick'] ?? 1000,
@@ -64,7 +67,7 @@ readonly class ClientOptions
             maxFrameSize: $options['max_frame_size'] ?? 1048576,
             maxActionIdLength: $options['max_action_id_length'] ?? 128,
             maxConnectAttemptsPerTick: $options['max_connect_attempts_per_tick'] ?? 5,
-            enforceIpEndpoints: $options['enforce_ip_endpoints'] ?? false,
+            enforceIpEndpoints: $options['enforce_ip_endpoints'] ?? true,
             lazy: $options['lazy'] ?? true,
         );
     }

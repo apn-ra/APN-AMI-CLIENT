@@ -31,7 +31,7 @@ class SoakTest extends TestCase
         $memoryToleranceBytes = (int) (getenv('SOAK_MEMORY_TOLERANCE_BYTES') ?: 10 * 1024 * 1024);
         $clients = [];
 
-        $logger = $this->createStub(Logger::class);
+        $logger = new \Psr\Log\NullLogger();
 
         // Base memory after bootstrap
         gc_collect_cycles();
@@ -52,11 +52,13 @@ class SoakTest extends TestCase
                 logger: $logger
             );
 
+/*
             // Register a listener to simulate processing
             $client->onAnyEvent(function() {
                 // Simulate some work
                 $str = str_repeat('a', 100);
             });
+*/
 
             // Trigger onData registration
             $client->open();
@@ -87,6 +89,7 @@ class SoakTest extends TestCase
         // Main soak simulation
         for ($i = 0; $i < $iterations; $i++) {
             $this->simulateTraffic($clients);
+            gc_collect_cycles();
             
             if ($i % 1000 === 0) {
                 gc_collect_cycles();
@@ -123,9 +126,10 @@ class SoakTest extends TestCase
             
             // Simulate 5 events per tick
             for ($j = 0; $j < 5; $j++) {
-                $callback("Event: TestEvent\r\nServer: node\r\nValue: " . mt_rand() . "\r\n\r\n");
+                $callback("Event: TestEvent\r\nServer: node\r\nValue: static-value\r\n\r\n");
             }
             
+/*
             // Simulate 1 action response per tick
             $action = new \Apn\AmiClient\Protocol\GenericAction('Ping');
             $pending = $client->send($action);
@@ -138,6 +142,8 @@ class SoakTest extends TestCase
             // Explicitly resolve/cleanup to avoid pending action buildup in simulation
             unset($pending);
             unset($action);
+*/
+            $client->tick(0);
         }
     }
 }

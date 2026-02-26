@@ -9,9 +9,13 @@ use Apn\AmiClient\Exceptions\ConnectionLostException;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\MissingResponseException;
 use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
+use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
+use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Response;
 use Apn\AmiClient\Protocol\Event;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 /**
@@ -31,14 +35,22 @@ final class CorrelationRegistry
     /** @var callable(string, Throwable, Action): void|null */
     private $callbackExceptionHandler = null;
 
+    private readonly LoggerInterface $logger;
+    private readonly MetricsCollectorInterface $metrics;
+
     /**
      * @param int $maxPending Hard limit for concurrent pending actions.
      */
     public function __construct(
         private readonly int $maxPending = 5000,
-        ?callable $callbackExceptionHandler = null
+        ?callable $callbackExceptionHandler = null,
+        ?LoggerInterface $logger = null,
+        ?MetricsCollectorInterface $metrics = null,
+        private readonly array $labels = []
     ) {
         $this->callbackExceptionHandler = $callbackExceptionHandler;
+        $this->logger = $logger ?? new NullLogger();
+        $this->metrics = $metrics ?? new NullMetricsCollector();
     }
 
     /**
@@ -114,6 +126,14 @@ final class CorrelationRegistry
 
         if (count($this->collectedEvents[$actionId]) < $maxMessages) {
             $this->collectedEvents[$actionId][] = $event;
+        } else {
+            // Safety cap reached (Phase 3, Task 4.1)
+            $this->logger->warning('Correlation event dropped due to safety cap', [
+                'server_key' => $this->labels['server_key'] ?? 'unknown',
+                'action_id' => $actionId,
+                'max_messages' => $maxMessages,
+            ]);
+            $this->metrics->increment('ami_correlation_events_dropped_total', $this->labels);
         }
 
         if ($strategy->onEvent($event)) {

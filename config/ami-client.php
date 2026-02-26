@@ -45,13 +45,15 @@ return [
         'read_timeout' => 30,
         // Per-frame parser cap in bytes (bounded internally to 64KB..4MB).
         'max_frame_size' => 1048576,
-        // Optional additions to default secret redaction key list/patterns.
+        // Optional additions to default secret redaction key list/patterns/values.
         'redaction_keys' => [],
         'redaction_key_patterns' => [],
+        'redaction_value_patterns' => [],
         // Max ActionID length (bounded internally to 64..256).
         'max_action_id_length' => 128,
-        // Production hostname policy: true requires literal IP endpoints (no DNS in connect path).
-        'enforce_ip_endpoints' => false,
+        // Production hostname policy: true requires literal IP endpoints (no DNS in tick/reconnect paths).
+        // If false, hostnames are resolved and cached at bootstrap; transports only use pre-resolved IPs.
+        'enforce_ip_endpoints' => true,
         'heartbeat_interval' => 15,
         // Circuit breaker: consecutive failure threshold before OPEN.
         'circuit_failure_threshold' => 5,

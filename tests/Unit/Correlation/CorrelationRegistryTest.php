@@ -332,6 +332,44 @@ class CorrelationRegistryTest extends TestCase
         $this->assertSame('Mock', $reported[0]['action']);
     }
 
+    public function test_it_drops_events_on_safety_cap(): void
+    {
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $metrics = $this->createMock(\Apn\AmiClient\Core\Contracts\MetricsCollectorInterface::class);
+        $labels = ['server_key' => 'node1'];
+        
+        $registry = new CorrelationRegistry(
+            maxPending: 10,
+            logger: $logger,
+            metrics: $metrics,
+            labels: $labels
+        );
+
+        // strategy with 2 max messages
+        $strategy = new MultiEventStrategy('Complete', 60000, 2);
+        $action = $this->createMockAction('id1', $strategy);
+        $registry->register($action);
+
+        $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'id1']));
+
+        // first 2 events should be accepted
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+
+        // third event should be dropped
+        $logger->expects($this->once())
+               ->method('warning')
+               ->with('Correlation event dropped due to safety cap', $this->callback(function($ctx) {
+                   return $ctx['action_id'] === 'id1' && $ctx['max_messages'] === 2;
+               }));
+        
+        $metrics->expects($this->once())
+                ->method('increment')
+                ->with('ami_correlation_events_dropped_total', $labels);
+
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+    }
+
     private function createMockAction(string $actionId, \Apn\AmiClient\Core\Contracts\CompletionStrategyInterface $strategy): Action
     {
         return new MockAction($actionId, $strategy);

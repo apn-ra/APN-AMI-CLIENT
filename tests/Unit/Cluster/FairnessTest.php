@@ -85,7 +85,7 @@ class FairnessTest extends TestCase
     public function test_max_bytes_read_per_tick(): void
     {
         // We need a real-ish TcpTransport but mocked resource
-        $transport = new TcpTransport('localhost', 5038, 30, 1024*1024, 10); // 10 bytes limit
+        $transport = new TcpTransport('127.0.0.1', 5038, 30, 1024*1024, 10); // 10 bytes limit
         
         $resource = fopen('php://temp', 'r+');
         fwrite($resource, "1234567890ABCDEFGHIJ");
