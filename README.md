@@ -78,4 +78,4 @@ while (true) {
 
 ## Contributing / Governance
 
-NBRC is authoritative for runtime behavior. Execute work by active batch/task files, and keep delta/task updates batch-scoped rather than appending to large plan files. See [`AGENTS.md`](AGENTS.md).
+NBRC is authoritative for runtime behavior. Execute work by active batch/task files, and keep delta/task updates batch-scoped rather than appending to large plan files.
