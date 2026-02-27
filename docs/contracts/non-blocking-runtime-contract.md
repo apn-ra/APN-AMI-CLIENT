@@ -1,8 +1,8 @@
-# Non-Blocking Runtime Contract (NBRC) — apn/ami-client
+# Non-Blocking Runtime Contract (NBRC) — apntalk/ami-client
 
 ## 0) Purpose
 
-This contract defines **what “non-blocking” means** for `apn/ami-client` in **24/7 dialer workloads** with **multi-server multiplexing**. It exists to prevent regressions like:
+This contract defines **what “non-blocking” means** for `apntalk/ami-client` in **24/7 dialer workloads** with **multi-server multiplexing**. It exists to prevent regressions like:
 
 - busy-spin / hot-loop in `ami:listen`
 - hidden blocking DNS / connect / close in tick paths
@@ -323,7 +323,7 @@ That combination kills both:
 Copy/paste this into Codex as the instruction header:
 
 ```text
-You are Codex working on apn/ami-client.
+You are Codex working on apntalk/ami-client.
 
 AUTHORITATIVE SPEC:
 - Follow docs/contracts/non-blocking-runtime-contract.md (NBRC) as a hard contract.

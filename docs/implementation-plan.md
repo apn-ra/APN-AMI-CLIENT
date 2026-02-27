@@ -7,7 +7,7 @@ This document outlines the implementation strategy for a high-performance, stand
 ## 1. Package Identity & Structure
 
 ### Package Details
-- **Composer Name:** `apn/ami-client`
+- **Composer Name:** `apntalk/ami-client`
 - **PSR-4 Namespace:** `Apn\AmiClient\`
 - **Minimum PHP Version:** 8.4+
 - **Framework Support:** Laravel 12.x (Adapter Layer)

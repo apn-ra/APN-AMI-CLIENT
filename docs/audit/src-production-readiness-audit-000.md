@@ -1,4 +1,4 @@
-# Production Readiness Audit: `src/` (apn/ami-client)
+# Production Readiness Audit: `src/` (apntalk/ami-client)
 
 ## 1. Executive Summary
 - **Verdict: Not Ready** for a 24/7 dialer workload in current form.

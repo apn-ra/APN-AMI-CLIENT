@@ -1,4 +1,4 @@
-# Production-Readiness Review of `src/` (apn/ami-client)
+# Production-Readiness Review of `src/` (apntalk/ami-client)
 
 ### 1. Executive Summary (5–10 bullets)
 - Verdict: **Nearly Ready** — strong non-blocking I/O, bounded buffers, and multi-node fairness, but a couple of correctness risks need fixes before 24/7 dialer load.

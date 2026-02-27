@@ -1,6 +1,6 @@
 # AMI Client Usage Guide
 
-This guide covers Laravel 12 and pure PHP usage of `apn/ami-client`.
+This guide covers Laravel 12 and pure PHP usage of `apntalk/ami-client`.
 
 Production readiness: **98 / 100** as of the latest audit (`docs/audit/src-production-readiness-audit-014.md`). This is a point-in-time measurement.
 
@@ -19,7 +19,7 @@ Production readiness: **98 / 100** as of the latest audit (`docs/audit/src-produ
 ## 2) Installation
 
 ```bash
-composer require apn/ami-client
+composer require apntalk/ami-client
 ```
 
 Requirements:

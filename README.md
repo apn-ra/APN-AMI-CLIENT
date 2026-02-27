@@ -1,4 +1,4 @@
-# apn/ami-client
+# apntalk/ami-client
 
 Dialer-optimized, multi-server AMI client for PHP/Laravel.
 
@@ -20,7 +20,7 @@ NBRC compliance is the gating principle for runtime behavior and release safety.
 ## Install
 
 ```bash
-composer require apn/ami-client
+composer require apntalk/ami-client
 ```
 
 Requirements:

@@ -1,7 +1,7 @@
 # APN AMI Client: Implementation Task Checklist
 
 ## Phase 0 --- Architectural Corrections
-1. [x] Define Composer name `apn/ami-client` and PSR-4 namespace `Apn\AmiClient\`.
+1. [x] Define Composer name `apntalk/ami-client` and PSR-4 namespace `Apn\AmiClient\`.
 2. [x] Set minimum PHP version 8.4+ in `composer.json`.
 3. [x] Establish directory structure (`src/Core`, `src/Cluster`, `src/Protocol`, etc.) as per Section 1.
 4. [x] Ensure Core layers remain strictly framework-agnostic (no `Illuminate\*` imports).

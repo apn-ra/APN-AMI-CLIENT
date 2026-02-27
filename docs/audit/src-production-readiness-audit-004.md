@@ -1,16 +1,16 @@
-# Production-Readiness Review of `src/` (apn/ami-client)
+# Production-Readiness Review of `src/` (apntalk/ami-client)
 
-### 1. Executive Summary (5–10 bullets)
+### 1. Executive Summary (5ï¿½10 bullets)
 - Verdict: **Not Ready** for 24/7 dialer use at this time due to a P1 invariant violation.
 - Production-readiness score: **74% (Not Ready)**.
 - Strength: Non-blocking transport design with `stream_select` and partial-write handling in the TCP transport. (`src/Transport/TcpTransport.php:146-238`)
 - Strength: Memory bounds enforced across key buffers/queues (write buffer cap, parser buffer cap, event queue capacity, pending-action cap). (`src/Transport/WriteBuffer.php:21-36`, `src/Protocol/Parser.php:23-55`, `src/Core/EventQueue.php:25-53`, `src/Correlation/CorrelationRegistry.php:45-66`)
 - Strength: Listener isolation and per-listener exception handling prevents dispatch loops from breaking. (`src/Core/AmiClient.php:522-536`, `src/Cluster/AmiClientManager.php:270-285`)
 - Top blocker (P1): Tick loop is **not guaranteed fully non-blocking** when hostname endpoints are allowed; DNS resolution can block inside the reconnect path. (`src/Transport/TcpTransport.php:33-56`, `src/Core/AmiClient.php:418`)
-- Other blocker: Async connect fallback can produce a **false-positive “connected” state** when socket extension helpers are unavailable. (`src/Transport/TcpTransport.php:277-283`)
+- Other blocker: Async connect fallback can produce a **false-positive ï¿½connectedï¿½ state** when socket extension helpers are unavailable. (`src/Transport/TcpTransport.php:277-283`)
 - Invariants: 9/10 pass; **Tick loop fully non-blocking = FAIL (conditional on config)**. All other invariants have evidence in code below.
 
-### 2. Scorecard (0–5 each)
+### 2. Scorecard (0ï¿½5 each)
 - Architecture/Boundaries: 4
 - Non-blocking I/O correctness: 3
 - Parser robustness: 4
@@ -30,7 +30,7 @@
 
 **Severity**: P2 medium
 **Location**: `src/Transport/TcpTransport.php:277-283`
-**Why it matters (dialer impact)**: When the socket extension functions are unavailable, the transport marks the connection as successful without verifying the async connect result. This can yield a false-positive “connected” state, causing actions to be queued to a dead socket and delayed failure feedback.
+**Why it matters (dialer impact)**: When the socket extension functions are unavailable, the transport marks the connection as successful without verifying the async connect result. This can yield a false-positive ï¿½connectedï¿½ state, causing actions to be queued to a dead socket and delayed failure feedback.
 **Concrete fix (code-level direction)**: Require ext-sockets in production, or add a portable fallback check (e.g., use `stream_get_meta_data()` and a non-blocking write probe with error handling). If no verification is possible, treat the connect as failed and close the socket.
 
 **Severity**: P3 low
