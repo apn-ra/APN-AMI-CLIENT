@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit\Laravel;
 
 use Apn\AmiClient\Cluster\AmiClientManager;
+use Apn\AmiClient\Core\Contracts\TransportInterface;
+use Apn\AmiClient\Core\TickSummary;
 use Apn\AmiClient\Laravel\Commands\ListenCommand;
 use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\TestCase;
@@ -30,9 +32,11 @@ class ListenCommandTest extends TestCase
     {
         $manager = $this->createMock(AmiClientManager::class);
         $manager->expects($this->once())->method('registerSignalHandlers');
+        $manager->expects($this->never())->method('recordIdleYield');
         $manager->expects($this->once())
             ->method('tickAll')
-            ->with(25);
+            ->with(25)
+            ->willReturn(TickSummary::empty());
 
         $command = $this->getMockBuilder(ListenCommand::class)
             ->onlyMethods(['option', 'info'])
@@ -62,9 +66,11 @@ class ListenCommandTest extends TestCase
     {
         $manager = $this->createMock(AmiClientManager::class);
         $manager->expects($this->once())->method('registerSignalHandlers');
+        $manager->expects($this->never())->method('recordIdleYield');
         $manager->expects($this->once())
             ->method('tick')
-            ->with('node1', 40);
+            ->with('node1', 40)
+            ->willReturn(TickSummary::empty());
 
         $command = $this->getMockBuilder(ListenCommand::class)
             ->onlyMethods(['option', 'info'])
@@ -123,7 +129,50 @@ class ListenCommandTest extends TestCase
 
         $command->expects($this->once())
             ->method('error')
-            ->with('Invalid listen loop cadence: tick-timeout-ms must be between 1 and 1000.');
+            ->with(sprintf(
+                'Invalid listen loop cadence: tick-timeout-ms must be between 1 and %d.',
+                TransportInterface::MAX_TICK_TIMEOUT_MS
+            ));
+
+        $result = $command->handle($manager);
+        $this->assertSame(1, $result);
+    }
+
+    public function testInvalidTickCadenceConfigIsRejectedWithTypedConfigurationError(): void
+    {
+        $manager = $this->createMock(AmiClientManager::class);
+        $manager->expects($this->never())->method('registerSignalHandlers');
+
+        $command = $this->getMockBuilder(ListenCommand::class)
+            ->onlyMethods(['option', 'error', 'configuredTickTimeoutMs'])
+            ->getMock();
+
+        $command->method('option')->willReturnCallback(function ($key) {
+            if ($key === 'server') {
+                return 'node1';
+            }
+            if ($key === 'all') {
+                return false;
+            }
+            if ($key === 'tick-timeout-ms') {
+                return null;
+            }
+            if ($key === 'once') {
+                return false;
+            }
+            if ($key === 'max-iterations') {
+                return null;
+            }
+            return null;
+        });
+
+        $command->method('configuredTickTimeoutMs')->willReturn('invalid');
+        $command->expects($this->once())
+            ->method('error')
+            ->with(sprintf(
+                'Invalid listen loop cadence: tick-timeout-ms must be an integer between 1 and %d.',
+                TransportInterface::MAX_TICK_TIMEOUT_MS
+            ));
 
         $result = $command->handle($manager);
         $this->assertSame(1, $result);

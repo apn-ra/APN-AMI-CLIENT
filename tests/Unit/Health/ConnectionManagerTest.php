@@ -7,6 +7,7 @@ namespace Tests\Unit\Health;
 use Apn\AmiClient\Health\ConnectionManager;
 use Apn\AmiClient\Health\CircuitState;
 use Apn\AmiClient\Health\HealthStatus;
+use Psr\Log\AbstractLogger;
 use PHPUnit\Framework\TestCase;
 
 class ConnectionManagerTest extends TestCase
@@ -152,5 +153,26 @@ class ConnectionManagerTest extends TestCase
 
         $manager->setStatus(HealthStatus::READY);
         $this->assertEquals(0, $manager->getReconnectAttempts());
+    }
+
+    public function testCircuitTransitionLoggingDoesNotThrowWhenLoggerFails(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('Logger failure');
+            }
+        };
+
+        $manager = new ConnectionManager(
+            circuitFailureThreshold: 1,
+            circuitCooldown: 30.0,
+            logger: $logger
+        );
+
+        $manager->setStatus(HealthStatus::CONNECTING);
+        $manager->recordConnectTimeout();
+
+        $this->assertEquals(CircuitState::OPEN, $manager->getCircuitState());
     }
 }

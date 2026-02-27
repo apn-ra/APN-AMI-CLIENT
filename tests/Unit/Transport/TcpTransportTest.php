@@ -7,6 +7,8 @@ namespace Tests\Unit\Transport;
 use Apn\AmiClient\Transport\TcpTransport;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\ConnectionException;
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
+use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Psr\Log\AbstractLogger;
 use PHPUnit\Framework\TestCase;
@@ -89,20 +91,45 @@ class TcpTransportTest extends TestCase
 
     public function testRejectsHostnameByPolicyByDefault(): void
     {
-        $transport = new TcpTransport('localhost', $this->port);
-
-        $this->expectException(ConnectionException::class);
+        $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('Hostname endpoints are disabled by policy');
-        $transport->open();
+
+        new TcpTransport('localhost', $this->port);
     }
 
     public function testRejectsHostnameWhenIpPolicyIsEnabled(): void
     {
-        $transport = new TcpTransport('localhost', $this->port, enforceIpEndpoints: true);
-
-        $this->expectException(ConnectionException::class);
+        $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('Hostname endpoints are disabled by policy');
+
+        new TcpTransport('localhost', $this->port, enforceIpEndpoints: true);
+    }
+
+    public function testRejectsHostnameWhenIpPolicyDisabledWithoutResolver(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('Hostname endpoints require a pre-resolved IP or injected hostname resolver');
+
+        new TcpTransport('localhost', $this->port, enforceIpEndpoints: false);
+    }
+
+    public function testAllowsHostnameWhenResolverProvided(): void
+    {
+        $transport = new TcpTransport(
+            'localhost',
+            $this->port,
+            enforceIpEndpoints: false,
+            hostnameResolver: static fn (string $host): string => '127.0.0.1'
+        );
+
         $transport->open();
+        $client = $this->awaitConnect($transport);
+        $this->assertNotNull($client);
+        $this->assertTrue($transport->isConnected());
+
+        if ($client) {
+            fclose($client);
+        }
     }
 
     public function testConnectFails(): void
@@ -430,5 +457,39 @@ class TcpTransportTest extends TestCase
             }
         }
         $this->assertTrue($foundMetric);
+    }
+
+    public function testTimeoutClampDoesNotThrowWhenLoggerFails(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('Logger failure');
+            }
+        };
+
+        $transport = new TcpTransport($this->host, $this->port, logger: $logger);
+
+        $transport->tick(TransportInterface::MAX_TICK_TIMEOUT_MS + 1);
+        $this->assertTrue(true);
+    }
+
+    public function testTransportErrorLoggingDoesNotThrowWhenLoggerFails(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('Logger failure');
+            }
+        };
+
+        $transport = new TcpTransport($this->host, $this->port, logger: $logger);
+
+        $ref = new \ReflectionProperty(TcpTransport::class, 'resource');
+        $ref->setAccessible(true);
+        $ref->setValue($transport, stream_context_create());
+
+        $transport->read();
+        $this->assertTrue(true);
     }
 }

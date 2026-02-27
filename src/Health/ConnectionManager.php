@@ -441,6 +441,18 @@ class ConnectionManager
             'cooldown_seconds' => $this->circuitCooldown,
         ];
 
-        $this->logger->warning('Circuit breaker transition', $context);
+        $this->safeLogWarning('Circuit breaker transition', $context);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLogWarning(string $message, array $context): void
+    {
+        try {
+            $this->logger->warning($message, $context);
+        } catch (\Throwable) {
+            // Logging must never interrupt runtime paths.
+        }
     }
 }

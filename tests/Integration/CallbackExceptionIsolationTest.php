@@ -13,6 +13,7 @@ use Apn\AmiClient\Health\ConnectionManager;
 use Apn\AmiClient\Health\HealthStatus;
 use Apn\AmiClient\Protocol\GenericAction;
 use Apn\AmiClient\Protocol\Response;
+use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\AbstractLogger;
 use Throwable;
@@ -136,5 +137,114 @@ final class CallbackExceptionIsolationTest extends TestCase
         $this->assertStringContainsString('"server_key":"node1"', $contents);
         $this->assertStringContainsString('"action_id":"' . $firstActionId . '"', $contents);
         $this->assertStringContainsString('"callback_exception_class":"RuntimeException"', $contents);
+    }
+
+    public function test_correlation_overflow_logging_failure_does_not_break_tick(): void
+    {
+        $transport = new class implements TransportInterface {
+            private bool $connected = true;
+            private ?\Closure $onData = null;
+            private int $pendingBytes = 0;
+
+            public function open(): void
+            {
+                $this->connected = true;
+            }
+
+            public function close(bool $graceful = true): void
+            {
+                $this->connected = false;
+            }
+
+            public function send(string $payload): void
+            {
+                $this->pendingBytes += strlen($payload);
+            }
+
+            public function isConnected(): bool
+            {
+                return $this->connected;
+            }
+
+            public function onData(callable $callback): void
+            {
+                $this->onData = \Closure::fromCallable($callback);
+            }
+
+            public function tick(int $timeoutMs = 0): void
+            {
+            }
+
+            public function receive(string $data): void
+            {
+                if ($this->onData !== null) {
+                    ($this->onData)($data);
+                }
+            }
+
+            public function getPendingWriteBytes(): int
+            {
+                return $this->pendingBytes;
+            }
+
+            public function terminate(): void
+            {
+                $this->close(false);
+            }
+        };
+
+        $throwingLogger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('correlation logger failure');
+            }
+        };
+
+        $correlation = new CorrelationManager(
+            new ActionIdGenerator('node1'),
+            new CorrelationRegistry(logger: $throwingLogger, labels: ['server_key' => 'node1'])
+        );
+
+        $connectionManager = new ConnectionManager();
+        $connectionManager->setStatus(HealthStatus::READY);
+
+        $client = new AmiClient(
+            'node1',
+            $transport,
+            $correlation,
+            connectionManager: $connectionManager,
+            host: '127.0.0.1'
+        );
+
+        $strategy = new MultiEventStrategy('Complete', 60000, 1);
+        $first = $client->send(new GenericAction('Ping', [], null, $strategy));
+        $second = $client->send(new GenericAction('Ping'));
+
+        $firstResolved = false;
+        $secondResolved = false;
+
+        $first->onComplete(function (?Throwable $e, ?Response $r) use (&$firstResolved): void {
+            $firstResolved = $e === null && $r?->isSuccess() === true;
+        });
+        $second->onComplete(function (?Throwable $e, ?Response $r) use (&$secondResolved): void {
+            $secondResolved = $e === null && $r?->isSuccess() === true;
+        });
+
+        $firstActionId = $first->getAction()->getActionId();
+        $secondActionId = $second->getAction()->getActionId();
+
+        $transport->receive(
+            "Response: Success\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Event: Data\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Event: Data\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Event: Complete\r\nActionID: {$firstActionId}\r\n\r\n" .
+            "Response: Success\r\nActionID: {$secondActionId}\r\n\r\n"
+        );
+
+        $client->processTick();
+
+        $this->assertTrue($firstResolved);
+        $this->assertTrue($secondResolved);
+        $this->assertSame(HealthStatus::READY, $client->getHealthStatus());
     }
 }

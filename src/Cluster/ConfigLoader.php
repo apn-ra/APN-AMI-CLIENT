@@ -15,7 +15,7 @@ final class ConfigLoader
     /**
      * Bootstraps an AmiClientManager from a configuration array.
      */
-    public static function load(array $config, ?LoggerInterface $logger = null): AmiClientManager
+    public static function load(array $config, ?LoggerInterface $logger = null, ?callable $hostnameResolver = null): AmiClientManager
     {
         $globalOptionsArr = $config['options'] ?? [];
         $globalOptions = ClientOptions::fromArray($globalOptionsArr);
@@ -27,7 +27,7 @@ final class ConfigLoader
             $registry->add(ServerConfig::fromArray((string)$key, $serverConfigArr));
         }
 
-        $manager = new AmiClientManager($registry, $globalOptions, $logger);
+        $manager = new AmiClientManager($registry, $globalOptions, $logger, hostnameResolver: $hostnameResolver);
 
         if (isset($config['default'])) {
             $manager->setDefaultServer((string)$config['default']);

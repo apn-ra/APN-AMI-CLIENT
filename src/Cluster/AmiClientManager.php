@@ -8,8 +8,10 @@ use Apn\AmiClient\Cluster\Contracts\RoutingStrategyInterface;
 use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
+use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\EventFilter;
 use Apn\AmiClient\Core\EventQueue;
+use Apn\AmiClient\Core\TickSummary;
 use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Correlation\ActionIdGenerator;
@@ -195,10 +197,10 @@ class AmiClientManager
     /**
      * Executes tick() for a specific server.
      */
-    public function tick(string $serverKey, int $timeoutMs = 0): void
+    public function tick(string $serverKey, int $timeoutMs = 0): TickSummary
     {
         $effectiveTimeoutMs = $this->normalizeRuntimeTimeoutMs($timeoutMs);
-        $this->server($serverKey)->tick($effectiveTimeoutMs);
+        return $this->server($serverKey)->tick($effectiveTimeoutMs);
     }
 
     /**
@@ -213,14 +215,17 @@ class AmiClientManager
      * Iterates through all active server connections and executes their tick() logic.
      * Guideline 2: Stream Select Ownership.
      */
-    public function tickAll(int $timeoutMs = 0): void
+    public function tickAll(int $timeoutMs = 0): TickSummary
     {
         $effectiveTimeoutMs = $this->normalizeRuntimeTimeoutMs($timeoutMs);
+        $summary = TickSummary::empty();
+        $tickStartedAt = microtime(true);
 
         // 0. Reset budgets for all clients
         foreach ($this->clients as $client) {
             if ($client instanceof AmiClient) {
                 $client->resetTickBudgets();
+                $client->resetTickCounters();
             }
         }
 
@@ -230,7 +235,7 @@ class AmiClientManager
         } catch (\Throwable $e) {
             // Guideline 5: Node Isolation. A failure in one node (or the reactor) 
             // should not impact others if possible. But reactor failure is critical.
-            $this->logger->error('Reactor tick failure', [
+            $this->safeLog('error', 'Reactor tick failure', [
                 'exception' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
@@ -249,19 +254,33 @@ class AmiClientManager
             $client = $this->clients[$key];
             try {
                 $canConnect = $this->connectAttemptsThisTick < $maxConnectAttempts;
-                if ($client->processTick($canConnect)) {
+                $attemptedConnect = $client->processTick($canConnect);
+                if ($attemptedConnect) {
                     $this->connectAttemptsThisTick++;
                     // Advance cursor on every attempted connect to prevent starvation.
                     $this->reconnectCursor = ($index + 1) % $count;
                 }
+                if ($client instanceof AmiClient) {
+                    $clientSummary = $client->getLastTickSummary();
+                    $summary->merge($clientSummary);
+                    $this->recordTickMetrics($key, $clientSummary);
+                } elseif ($attemptedConnect) {
+                    $summary->connectAttempts += 1;
+                    $this->recordTickMetrics($key, new TickSummary(connectAttempts: 1));
+                }
             } catch (\Throwable $e) {
                 // Guideline 5: Node Isolation. Failure in one client must not block others.
-                $this->logger->error('Client processTick failure', [
+                $this->safeLog('error', 'Client processTick failure', [
                     'server_key' => $key,
                     'exception' => $e->getMessage(),
                 ]);
             }
         }
+
+        $tickDurationMs = (microtime(true) - $tickStartedAt) * 1000;
+        $this->recordAggregateTickMetrics($summary, $tickDurationMs);
+
+        return $summary;
     }
 
     /**
@@ -274,14 +293,24 @@ class AmiClientManager
 
     private function normalizeRuntimeTimeoutMs(int $timeoutMs): int
     {
-        $normalized = max(0, $timeoutMs);
-        if ($normalized > 0) {
-            $this->metrics->increment('ami_runtime_timeout_clamped_total', [
-                'mode' => 'non_blocking',
-            ]);
+        if ($timeoutMs < TransportInterface::MIN_TICK_TIMEOUT_MS) {
+            throw new \InvalidArgumentException('timeoutMs must be >= 0.');
         }
 
-        return 0;
+        $max = TransportInterface::MAX_TICK_TIMEOUT_MS;
+        if ($timeoutMs > $max) {
+            $this->metrics->increment('ami_runtime_timeout_clamped_total', [
+                'component' => 'manager',
+                'reason' => 'above_max',
+            ]);
+            $this->safeLog('warning', 'Runtime tick timeout exceeds maximum; clamping.', [
+                'timeout_ms' => $timeoutMs,
+                'max_timeout_ms' => $max,
+            ]);
+            return $max;
+        }
+
+        return $timeoutMs;
     }
 
     /**
@@ -318,7 +347,7 @@ class AmiClientManager
                 try {
                     $listener($event);
                 } catch (\Throwable $e) {
-                    $this->logger->error('Manager event listener failed', [
+                    $this->safeLog('error', 'Manager event listener failed', [
                         'server_key' => $event->serverKey,
                         'event_name' => $event->getName(),
                         'exception' => $e->getMessage(),
@@ -332,7 +361,7 @@ class AmiClientManager
             try {
                 $listener($event);
             } catch (\Throwable $e) {
-                $this->logger->error('Manager any-event listener failed', [
+                $this->safeLog('error', 'Manager any-event listener failed', [
                     'server_key' => $event->serverKey,
                     'event_name' => $event->getName(),
                     'exception' => $e->getMessage(),
@@ -565,6 +594,81 @@ class AmiClientManager
             };
             pcntl_signal(SIGTERM, $handler);
             pcntl_signal(SIGINT, $handler);
+        }
+    }
+
+    /**
+     * @internal
+     */
+    public function recordIdleYield(string $serverKey): void
+    {
+        $this->safeMetric(fn () => $this->metrics->increment('ami_idle_yield_count', [
+            'server_key' => $serverKey,
+        ]));
+    }
+
+    private function recordAggregateTickMetrics(TickSummary $summary, float $durationMs): void
+    {
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_duration_ms', $durationMs, [
+            'server_key' => 'all',
+        ]));
+        $this->safeMetric(fn () => $this->metrics->set('ami_tick_progress', $summary->hasProgress() ? 1.0 : 0.0, [
+            'server_key' => 'all',
+        ]));
+    }
+
+    private function recordTickMetrics(string $serverKey, TickSummary $summary): void
+    {
+        $this->safeMetric(fn () => $this->metrics->set('ami_tick_progress', $summary->hasProgress() ? 1.0 : 0.0, [
+            'server_key' => $serverKey,
+        ]));
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_bytes_read', (float) $summary->bytesRead, [
+            'server_key' => $serverKey,
+        ]));
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_bytes_written', (float) $summary->bytesWritten, [
+            'server_key' => $serverKey,
+        ]));
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_frames_parsed', (float) $summary->framesParsed, [
+            'server_key' => $serverKey,
+        ]));
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_events_dispatched', (float) $summary->eventsDispatched, [
+            'server_key' => $serverKey,
+        ]));
+        $this->safeMetric(fn () => $this->metrics->record('ami_tick_connect_attempts', (float) $summary->connectAttempts, [
+            'server_key' => $serverKey,
+        ]));
+    }
+
+    private function safeMetric(callable $operation): void
+    {
+        try {
+            $operation();
+        } catch (\Throwable $e) {
+            $this->safeLog('warning', 'Metrics emission failed', [
+                'exception' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLog(string $level, string $message, array $context = []): void
+    {
+        try {
+            match ($level) {
+                'debug' => $this->logger->debug($message, $context),
+                'info' => $this->logger->info($message, $context),
+                'notice' => $this->logger->notice($message, $context),
+                'warning' => $this->logger->warning($message, $context),
+                'error' => $this->logger->error($message, $context),
+                'critical' => $this->logger->critical($message, $context),
+                'alert' => $this->logger->alert($message, $context),
+                'emergency' => $this->logger->emergency($message, $context),
+                default => $this->logger->log($level, $message, $context),
+            };
+        } catch (\Throwable) {
+            // NB-51: logging failures must never break runtime loop execution.
         }
     }
 }

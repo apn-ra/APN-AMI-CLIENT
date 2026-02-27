@@ -49,9 +49,11 @@ interface AmiClientInterface
     /**
      * Perform one tick of processing (I/O, parsing, timeouts).
      *
-     * @param int $timeoutMs
+     * @param int $timeoutMs Maximum selector wait in milliseconds. Valid range:
+     *                       0..TransportInterface::MAX_TICK_TIMEOUT_MS. Negative values are rejected.
+     *                       Values above MAX_TICK_TIMEOUT_MS are clamped.
      */
-    public function tick(int $timeoutMs = 0): void;
+    public function tick(int $timeoutMs = 0): \Apn\AmiClient\Core\TickSummary;
     
     /**
      * Alias for tick(0). Explicitly non-blocking poll for I/O and protocol events.

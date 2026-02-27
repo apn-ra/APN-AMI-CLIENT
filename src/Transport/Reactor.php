@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Transport;
 
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
+use Apn\AmiClient\Core\Contracts\TransportInterface;
 use Apn\AmiClient\Core\NullMetricsCollector;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -48,8 +49,9 @@ class Reactor
     /**
      * Perform one tick of I/O multiplexing for all registered transports.
      *
-     * @param int $timeoutMs Timeout for stream_select in milliseconds. 
-     *                       Use 0 for non-blocking production loops (Guideline 2).
+     * @param int $timeoutMs Maximum selector wait in milliseconds. Valid range:
+     *                       0..TransportInterface::MAX_TICK_TIMEOUT_MS. Negative values are rejected.
+     *                       Values above MAX_TICK_TIMEOUT_MS are clamped.
      */
     public function tick(int $timeoutMs = 0): void
     {
@@ -91,9 +93,14 @@ class Reactor
         $microseconds = ($timeoutMs % 1000) * 1000;
 
         // Guideline 2: The event loop or a dedicated Reactor component must own the stream_select call.
+        $selectStartedAt = microtime(true);
         [$ready, $error] = $this->captureError(function () use (&$read, &$write, &$except, $seconds, $microseconds) {
-            return stream_select($read, $write, $except, $seconds, $microseconds);
+            return $this->selectStreams($read, $write, $except, $seconds, $microseconds);
         });
+        $selectWaitMs = (microtime(true) - $selectStartedAt) * 1000;
+        $this->safeMetric(fn () => $this->metrics->record('ami_selector_wait_ms', $selectWaitMs, [
+            'scope' => 'reactor',
+        ]));
 
         if ($ready === false) {
             $this->handleStreamSelectFailure($idToKey, $error);
@@ -134,7 +141,7 @@ class Reactor
 
             $transport = $this->transports[$key];
             $resource = $transport->getResource();
-            if ($resource === null || !is_resource($resource)) {
+            if (!$this->isSelectableStream($resource)) {
                 $this->logTransportError($key, 'stream_select', $error, [
                     'resource_state' => 'invalid',
                 ]);
@@ -142,28 +149,28 @@ class Reactor
                 continue;
             }
 
-            $probeRead = $transport->isConnected() ? [$resource] : [];
-            $probeWrite = [];
-            if ($transport->isConnecting() || ($transport->isConnected() && $transport->hasPendingWrites())) {
-                $probeWrite = [$resource];
-            }
-
-            if (empty($probeRead) && empty($probeWrite)) {
-                continue;
-            }
-
-            $except = null;
-            [$probeResult, $probeError] = $this->captureError(function () use (&$probeRead, &$probeWrite, &$except) {
-                return stream_select($probeRead, $probeWrite, $except, 0, 0);
-            });
-
-            if ($probeResult === false) {
-                $this->logTransportError($key, 'stream_select', $probeError ?? $error, [
-                    'resource_state' => 'invalid',
-                ]);
-                $transport->close(false);
-            }
+            // Selector failure is global for this tick; mark affected transports and reconnect
+            // on the next manager pass without issuing secondary selector probes.
+            $this->logTransportError($key, 'stream_select', $error, [
+                'resource_state' => 'affected',
+            ]);
+            $transport->close(false);
         }
+    }
+
+    /**
+     * @param array<int, resource> $read
+     * @param array<int, resource> $write
+     * @param array<int, resource>|null $except
+     */
+    protected function selectStreams(array &$read, array &$write, ?array &$except, int $seconds, int $microseconds): int|false
+    {
+        return stream_select($read, $write, $except, $seconds, $microseconds);
+    }
+
+    private function isSelectableStream(mixed $resource): bool
+    {
+        return is_resource($resource) && get_resource_type($resource) === 'stream';
     }
 
     /**
@@ -211,15 +218,65 @@ class Reactor
             'exception_class' => $error['exception_class'] ?? null,
         ], $context);
 
-        $this->logger->warning('Reactor stream_select failed', $payload);
+        $this->safeLog('warning', 'Reactor stream_select failed', $payload);
         $this->metrics->increment('ami_transport_errors_total', [
             'server_key' => $serverKey,
             'operation' => $operation,
         ]);
     }
 
-    private function normalizeTimeoutMs(int $timeoutMs): int
+    private function safeMetric(callable $operation): void
     {
-        return 0;
+        try {
+            $operation();
+        } catch (\Throwable $e) {
+            $this->safeLog('warning', 'Metrics emission failed', [
+                'exception' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    protected function normalizeTimeoutMs(int $timeoutMs): int
+    {
+        if ($timeoutMs < TransportInterface::MIN_TICK_TIMEOUT_MS) {
+            throw new \InvalidArgumentException('timeoutMs must be >= 0.');
+        }
+
+        $max = TransportInterface::MAX_TICK_TIMEOUT_MS;
+        if ($timeoutMs > $max) {
+            $this->metrics->increment('ami_runtime_timeout_clamped_total', [
+                'component' => 'reactor',
+                'reason' => 'above_max',
+            ]);
+            $this->safeLog('warning', 'Reactor tick timeout exceeds maximum; clamping.', [
+                'timeout_ms' => $timeoutMs,
+                'max_timeout_ms' => $max,
+            ]);
+            return $max;
+        }
+
+        return $timeoutMs;
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLog(string $level, string $message, array $context = []): void
+    {
+        try {
+            match ($level) {
+                'debug' => $this->logger->debug($message, $context),
+                'info' => $this->logger->info($message, $context),
+                'notice' => $this->logger->notice($message, $context),
+                'warning' => $this->logger->warning($message, $context),
+                'error' => $this->logger->error($message, $context),
+                'critical' => $this->logger->critical($message, $context),
+                'alert' => $this->logger->alert($message, $context),
+                'emergency' => $this->logger->emergency($message, $context),
+                default => $this->logger->log($level, $message, $context),
+            };
+        } catch (\Throwable) {
+            // NB-51: logger failures must never interrupt runtime tick processing.
+        }
     }
 }

@@ -10,6 +10,9 @@ namespace Apn\AmiClient\Core\Contracts;
  */
 interface TransportInterface
 {
+    public const MIN_TICK_TIMEOUT_MS = 0;
+    public const MAX_TICK_TIMEOUT_MS = 250;
+
     /**
      * Establish the connection.
      *
@@ -34,7 +37,9 @@ interface TransportInterface
     /**
      * Perform I/O multiplexing (Read/Write).
      *
-     * @param int $timeoutMs Timeout for stream_select in milliseconds.
+     * @param int $timeoutMs Maximum selector wait in milliseconds. Valid range:
+     *                       0..MAX_TICK_TIMEOUT_MS. Negative values are rejected.
+     *                       Values above MAX_TICK_TIMEOUT_MS are clamped.
      */
     public function tick(int $timeoutMs = 0): void;
 

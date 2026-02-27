@@ -129,7 +129,7 @@ final class CorrelationRegistry
             $this->collectedEvents[$actionId][] = $event;
         } else {
             // Safety cap reached (Phase 3, Task 4.1)
-            $this->logger->warning('Correlation event dropped due to safety cap', [
+            $this->safeLogWarning('Correlation event dropped due to safety cap', [
                 'server_key' => $this->labels['server_key'] ?? 'unknown',
                 'action_id' => $actionId,
                 'max_messages' => $maxMessages,
@@ -251,5 +251,17 @@ final class CorrelationRegistry
     public function count(): int
     {
         return count($this->pending);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLogWarning(string $message, array $context): void
+    {
+        try {
+            $this->logger->warning($message, $context);
+        } catch (\Throwable) {
+            // Logging must never interrupt runtime paths.
+        }
     }
 }

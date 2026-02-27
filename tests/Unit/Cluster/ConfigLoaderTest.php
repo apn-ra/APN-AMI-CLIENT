@@ -30,5 +30,25 @@ final class ConfigLoaderTest extends TestCase
 
         ConfigLoader::load($config);
     }
-}
 
+    public function testRejectsHostnameWithoutResolverWhenIpPolicyDisabled(): void
+    {
+        $config = [
+            'default' => 'node1',
+            'options' => [
+                'enforce_ip_endpoints' => false,
+            ],
+            'servers' => [
+                'node1' => [
+                    'host' => 'example.test',
+                    'port' => 5038,
+                ],
+            ],
+        ];
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('pre-resolved IP or an injected hostname resolver');
+
+        ConfigLoader::load($config);
+    }
+}

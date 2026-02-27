@@ -63,6 +63,11 @@ class AmiClient implements AmiClientInterface
     private float $lastDroppedEventLogAt = 0.0;
     /** @var callable(): float */
     private $clock;
+    private int $lastTickBytesRead = 0;
+    private int $lastTickFramesParsed = 0;
+    private int $lastTickEventsDispatched = 0;
+    private int $lastTickStateTransitions = 0;
+    private int $lastTickConnectAttempts = 0;
 
     public function __construct(
         private readonly string $serverKey,
@@ -118,20 +123,31 @@ class AmiClient implements AmiClientInterface
         $this->eventFilter = $eventFilter ?? new EventFilter();
 
         $this->correlation->setCallbackExceptionHandler(function (string $callbackIdentity, Throwable $e, Action $action): void {
-            $this->logger->error('Pending action callback failed', [
-                'server_key' => $this->serverKey,
-                'action_id' => $action->getActionId(),
-                'action_name' => $action->getActionName(),
-                'callback' => $callbackIdentity,
-                'exception_class' => $e::class,
-                'exception' => $e->getMessage(),
-            ]);
+            $loggerFailure = null;
+            try {
+                $this->logger->error('Pending action callback failed', [
+                    'server_key' => $this->serverKey,
+                    'action_id' => $action->getActionId(),
+                    'action_name' => $action->getActionName(),
+                    'callback' => $callbackIdentity,
+                    'exception_class' => $e::class,
+                    'exception' => $e->getMessage(),
+                ]);
+            } catch (Throwable $logError) {
+                $loggerFailure = $logError;
+            }
 
             $this->metrics->increment('ami_callback_exceptions_total', [
                 'server_key' => $this->serverKey,
                 'server_host' => $this->host,
                 'action' => $action->getActionName(),
             ]);
+
+            if ($loggerFailure !== null) {
+                // Allow PendingAction fallback telemetry to emit callback-exception context
+                // through the correlation logger without breaking tick flow.
+                throw $loggerFailure;
+            }
         });
         
         $this->transport->onData($this->onRawData(...));
@@ -210,7 +226,7 @@ class AmiClient implements AmiClientInterface
         try {
             $pending = $this->correlation->register($action);
         } catch (BackpressureException $e) {
-            $this->logger->warning('Action rejected due to backpressure', [
+            $this->safeLog('warning', 'Action rejected due to backpressure', [
                 'action_id' => $actionId,
                 'action_name' => $action->getActionName(),
                 'pending_count' => $this->correlation->count(),
@@ -258,7 +274,7 @@ class AmiClient implements AmiClientInterface
 
             $rolledBack = $this->correlation->rollback($actionId, $wrapped);
 
-            $this->logger->warning('Action rejected due to transport backpressure', [
+            $this->safeLog('warning', 'Action rejected due to transport backpressure', [
                 'action_id' => $actionId,
                 'action_name' => $action->getActionName(),
                 'queue_depth' => $this->transport->getPendingWriteBytes(),
@@ -306,15 +322,18 @@ class AmiClient implements AmiClientInterface
     /**
      * @inheritDoc
      */
-    public function tick(int $timeoutMs = 0): void
+    public function tick(int $timeoutMs = 0): TickSummary
     {
         $this->resetTickBudgets();
+        $this->resetTickCounters();
 
         // 1. I/O Multiplexing
         $this->transport->tick($timeoutMs);
 
         // 2. Internal processing (timeouts, health)
         $this->processTick(true);
+
+        return $this->getLastTickSummary();
     }
 
     /**
@@ -340,6 +359,11 @@ class AmiClient implements AmiClientInterface
     public function processTick(bool $canAttemptConnect = true): bool
     {
         $attemptedConnect = false;
+        $this->lastTickFramesParsed = 0;
+        $this->lastTickEventsDispatched = 0;
+        $this->lastTickStateTransitions = 0;
+        $this->lastTickConnectAttempts = 0;
+        $initialStatus = $this->connectionManager->getStatus();
 
         // 0. OOM Protection (Guideline 8, Task 6.6)
         if ($this->memoryLimit > 0 && memory_get_usage() > $this->memoryLimit) {
@@ -360,13 +384,14 @@ class AmiClient implements AmiClientInterface
                 $framesProcessed++;
             }
         } catch (Throwable $e) {
-            $this->logger->error('Protocol error or parser desync during processing', [
+            $this->safeLog('error', 'Protocol error or parser desync during processing', [
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),
             ]);
             $this->forceClose('Protocol error');
             return false;
         }
+        $this->lastTickFramesParsed = $framesProcessed;
 
         $this->maybeLogEventDropSummary();
 
@@ -374,7 +399,7 @@ class AmiClient implements AmiClientInterface
         $this->correlation->sweep();
 
         if ($this->connectionManager->shouldForceClose()) {
-            $this->logger->warning('Max heartbeat failures reached, force-closing connection', [
+            $this->safeLog('warning', 'Max heartbeat failures reached, force-closing connection', [
                 'server_key' => $this->serverKey,
                 'consecutive_failures' => $this->connectionManager->getConsecutiveHeartbeatFailures(),
             ]);
@@ -395,7 +420,7 @@ class AmiClient implements AmiClientInterface
 
             if ($currentStatus === HealthStatus::CONNECTING && $this->connectionManager->isConnectTimedOut()) {
                 $delay = $this->connectionManager->previewReconnectDelay();
-                $this->logger->warning('Connection timed out, scheduling reconnect...', [
+                $this->safeLog('warning', 'Connection timed out, scheduling reconnect...', [
                     'server_key' => $this->serverKey,
                     'host' => $this->host,
                     'port' => $this->port,
@@ -412,7 +437,7 @@ class AmiClient implements AmiClientInterface
             
             if ($canAttemptConnect && $this->connectionManager->shouldAttemptReconnect()) {
                 $delay = $this->connectionManager->previewReconnectDelay();
-                $this->logger->warning('Reconnecting...', [
+                $this->safeLog('warning', 'Reconnecting...', [
                     'server_key' => $this->serverKey,
                     'host' => $this->host,
                     'port' => $this->port,
@@ -428,7 +453,7 @@ class AmiClient implements AmiClientInterface
                     $this->open();
                 } catch (Throwable $e) {
                      $delay = $this->connectionManager->previewReconnectDelay();
-                     $this->logger->warning('Connection failed, scheduling reconnect...', [
+                     $this->safeLog('warning', 'Connection failed, scheduling reconnect...', [
                          'server_key' => $this->serverKey,
                          'host' => $this->host,
                          'port' => $this->port,
@@ -447,7 +472,7 @@ class AmiClient implements AmiClientInterface
 
              if ($this->connectionManager->isReadTimedOut()) {
                  $delay = $this->connectionManager->previewReconnectDelay();
-                 $this->logger->warning('Read timed out, scheduling reconnect...', [
+                 $this->safeLog('warning', 'Read timed out, scheduling reconnect...', [
                      'server_key' => $this->serverKey,
                      'host' => $this->host,
                      'port' => $this->port,
@@ -465,7 +490,7 @@ class AmiClient implements AmiClientInterface
              // Check for login timeout (Phase 4 Task 4.2)
              if ($this->connectionManager->isLoginTimedOut()) {
                  $delay = $this->connectionManager->previewReconnectDelay();
-                 $this->logger->warning('Authentication timed out, reconnecting...', [
+                 $this->safeLog('warning', 'Authentication timed out, reconnecting...', [
                     'server_key' => $this->serverKey,
                     'host' => $this->host,
                     'port' => $this->port,
@@ -529,7 +554,7 @@ class AmiClient implements AmiClientInterface
                      try {
                          $listener($event);
                      } catch (Throwable $e) {
-                         $this->logger->error('Event listener failed', [
+                         $this->safeLog('error', 'Event listener failed', [
                              'server_key' => $this->serverKey,
                              'event_name' => $event->getName(),
                              'exception' => $e->getMessage(),
@@ -542,7 +567,7 @@ class AmiClient implements AmiClientInterface
                  try {
                      $listener($event);
                  } catch (Throwable $e) {
-                     $this->logger->error('Any-event listener failed', [
+                     $this->safeLog('error', 'Any-event listener failed', [
                          'server_key' => $this->serverKey,
                          'event_name' => $event->getName(),
                          'exception' => $e->getMessage(),
@@ -550,10 +575,50 @@ class AmiClient implements AmiClientInterface
                  }
              }
              $eventsProcessed++;
-         }
+        }
+        $this->lastTickEventsDispatched = $eventsProcessed;
 
-         return $attemptedConnect;
-     }
+        if ($this->connectionManager->getStatus() !== $initialStatus) {
+            $this->lastTickStateTransitions = 1;
+        }
+
+        if ($attemptedConnect) {
+            $this->lastTickConnectAttempts = 1;
+        }
+
+        return $attemptedConnect;
+    }
+
+    /**
+     * @internal
+     */
+    public function resetTickCounters(): void
+    {
+        $this->lastTickBytesRead = 0;
+        if (method_exists($this->transport, 'resetTickStats')) {
+            $this->transport->resetTickStats();
+        }
+    }
+
+    /**
+     * @internal
+     */
+    public function getLastTickSummary(): TickSummary
+    {
+        $bytesWritten = 0;
+        if (method_exists($this->transport, 'getLastTickWrittenBytes')) {
+            $bytesWritten = $this->transport->getLastTickWrittenBytes();
+        }
+
+        return new TickSummary(
+            bytesRead: $this->lastTickBytesRead,
+            bytesWritten: $bytesWritten,
+            framesParsed: $this->lastTickFramesParsed,
+            eventsDispatched: $this->lastTickEventsDispatched,
+            stateTransitions: $this->lastTickStateTransitions,
+            connectAttempts: $this->lastTickConnectAttempts
+        );
+    }
 
      /**
       * Emergency shutdown and resource release.
@@ -667,10 +732,11 @@ class AmiClient implements AmiClientInterface
     private function onRawData(string $data): void
     {
         try {
+            $this->lastTickBytesRead += strlen($data);
             $this->parser->push($data);
             $this->connectionManager->recordRead();
         } catch (Throwable $e) {
-            $this->logger->error('Parser push error', [
+            $this->safeLog('error', 'Parser push error', [
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),
             ]);
@@ -684,7 +750,7 @@ class AmiClient implements AmiClientInterface
     private function dispatchMessage(Message $message): void
     {
         if ($message instanceof Banner) {
-            $this->logger->info("AMI connection banner received: {$message->getVersionString()}", [
+            $this->safeLog('info', "AMI connection banner received: {$message->getVersionString()}", [
                 'server_key' => $this->serverKey,
                 'banner' => $message->getVersionString(),
             ]);
@@ -735,7 +801,7 @@ class AmiClient implements AmiClientInterface
         $this->lastDroppedEventLogTotal = $droppedTotal;
         $this->lastDroppedEventLogAt = $now;
 
-        $this->logger->warning('Event drops summary due to queue capacity', [
+        $this->safeLog('warning', 'Event drops summary due to queue capacity', [
             'server_key' => $this->serverKey,
             'dropped_delta' => $droppedDelta,
             'dropped_total' => $droppedTotal,
@@ -777,7 +843,7 @@ class AmiClient implements AmiClientInterface
             $logoff = (new Logoff())->withActionId($actionId);
             $this->transport->send($this->serializeAction($logoff));
         } catch (Throwable $e) {
-            $this->logger->warning('Graceful logoff enqueue failed during shutdown', [
+            $this->safeLog('warning', 'Graceful logoff enqueue failed during shutdown', [
                 'server_key' => $this->serverKey,
                 'reason' => 'shutdown_logoff_enqueue_failed',
                 'exception_class' => $e::class,
@@ -828,5 +894,27 @@ class AmiClient implements AmiClientInterface
         $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
         $this->parser->reset();
         $this->correlation->failAll($reason);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLog(string $level, string $message, array $context = []): void
+    {
+        try {
+            match ($level) {
+                'debug' => $this->logger->debug($message, $context),
+                'info' => $this->logger->info($message, $context),
+                'notice' => $this->logger->notice($message, $context),
+                'warning' => $this->logger->warning($message, $context),
+                'error' => $this->logger->error($message, $context),
+                'critical' => $this->logger->critical($message, $context),
+                'alert' => $this->logger->alert($message, $context),
+                'emergency' => $this->logger->emergency($message, $context),
+                default => $this->logger->log($level, $message, $context),
+            };
+        } catch (Throwable) {
+            // NB-51: logger backend failures must not break runtime processing.
+        }
     }
 }

@@ -17,6 +17,7 @@ use Apn\AmiClient\Exceptions\MissingResponseException;
 use Apn\AmiClient\Exceptions\ProtocolException;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
+use Psr\Log\AbstractLogger;
 use PHPUnit\Framework\TestCase;
 
 class CorrelationRegistryTest extends TestCase
@@ -397,6 +398,42 @@ class CorrelationRegistryTest extends TestCase
                 ->with('ami_correlation_events_dropped_total', $labels);
 
         $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+    }
+
+    public function test_it_drops_events_on_safety_cap_when_logger_throws(): void
+    {
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('logger failed');
+            }
+        };
+        $metrics = $this->createMock(\Apn\AmiClient\Core\Contracts\MetricsCollectorInterface::class);
+        $labels = ['server_key' => 'node1'];
+
+        $registry = new CorrelationRegistry(
+            maxPending: 10,
+            logger: $logger,
+            metrics: $metrics,
+            labels: $labels
+        );
+
+        $strategy = new MultiEventStrategy('Complete', 60000, 2);
+        $action = $this->createMockAction('id1', $strategy);
+        $registry->register($action);
+
+        $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'id1']));
+
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+
+        $metrics->expects($this->once())
+            ->method('increment')
+            ->with('ami_correlation_events_dropped_total', $labels);
+
+        $registry->handleEvent(new Event(['event' => 'Data', 'actionid' => 'id1']));
+
+        $this->assertTrue(true);
     }
 
     private function createMockAction(string $actionId, \Apn\AmiClient\Core\Contracts\CompletionStrategyInterface $strategy): Action

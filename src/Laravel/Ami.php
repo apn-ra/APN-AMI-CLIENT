@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Facade;
 /**
  * @method static \Apn\AmiClient\Core\Contracts\AmiClientInterface server(string $key)
  * @method static \Apn\AmiClient\Core\Contracts\AmiClientInterface default()
- * @method static void tickAll(int $timeoutMs = 0)
+ * @method static \Apn\AmiClient\Core\TickSummary tickAll(int $timeoutMs = 0)
  * @method static void onEvent(string $eventName, callable $listener)
  * @method static void onAnyEvent(callable $listener)
  * @method static array health()

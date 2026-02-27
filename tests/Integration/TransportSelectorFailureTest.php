@@ -43,11 +43,26 @@ class TransportSelectorFailureTest extends TestCase
                     'amount' => $amount,
                 ];
             }
-            public function record(string $name, float $value, array $labels = []): void {}
+            public function record(string $name, float $value, array $labels = []): void
+            {
+                $this->increments[] = [
+                    'name' => $name,
+                    'labels' => $labels,
+                    'amount' => $value,
+                ];
+            }
             public function set(string $name, float $value, array $labels = []): void {}
         };
 
-        $reactor = new Reactor($logger, $metrics);
+        $reactor = new class($logger, $metrics) extends Reactor {
+            public int $selectorCalls = 0;
+
+            protected function selectStreams(array &$read, array &$write, ?array &$except, int $seconds, int $microseconds): int|false
+            {
+                $this->selectorCalls++;
+                return false;
+            }
+        };
 
         $transport = new class ($logger, $metrics) extends TcpTransport {
             public bool $openCalled = false;
@@ -135,6 +150,7 @@ class TransportSelectorFailureTest extends TestCase
 
         $this->assertTrue($transport->closeCalled);
         $this->assertTrue($transport->openCalled);
+        $this->assertSame(1, $reactor->selectorCalls);
 
         $logRecord = null;
         foreach ($logger->records as $record) {
@@ -157,5 +173,14 @@ class TransportSelectorFailureTest extends TestCase
             }
         }
         $this->assertTrue($foundMetric);
+
+        $foundSelectorWait = false;
+        foreach ($metrics->increments as $increment) {
+            if ($increment['name'] === 'ami_selector_wait_ms') {
+                $foundSelectorWait = true;
+                break;
+            }
+        }
+        $this->assertTrue($foundSelectorWait);
     }
 }

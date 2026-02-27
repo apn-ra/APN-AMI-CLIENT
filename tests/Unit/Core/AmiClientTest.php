@@ -627,6 +627,47 @@ class AmiClientTest extends TestCase
         $pending->resolve(new Response(['Response' => 'Success']));
     }
 
+    public function testTickSummaryCapturesReadAndDispatchActivity(): void
+    {
+        $transport = new class implements TransportInterface {
+            private ?\Closure $callback = null;
+            private bool $connected = true;
+
+            public function open(): void {}
+            public function close(bool $graceful = true): void {}
+            public function send(string $data): void {}
+            public function tick(int $timeoutMs = 0): void
+            {
+                if ($this->callback !== null) {
+                    ($this->callback)("Event: TestEvent\r\n\r\n");
+                }
+            }
+            public function onData(callable $callback): void
+            {
+                $this->callback = \Closure::fromCallable($callback);
+            }
+            public function isConnected(): bool
+            {
+                return $this->connected;
+            }
+            public function getPendingWriteBytes(): int
+            {
+                return 0;
+            }
+            public function terminate(): void {}
+        };
+
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $client = new AmiClient('node1', $transport, $correlation);
+
+        $summary = $client->tick(0);
+
+        $this->assertSame(strlen("Event: TestEvent\r\n\r\n"), $summary->bytesRead);
+        $this->assertSame(1, $summary->framesParsed);
+        $this->assertSame(1, $summary->eventsDispatched);
+        $this->assertTrue($summary->hasProgress());
+    }
+
     public function testCloseSendsLogoff(): void
     {
         $transport = new class implements TransportInterface {
@@ -713,5 +754,38 @@ class AmiClientTest extends TestCase
         $this->assertSame('shutdown_logoff_enqueue_failed', $record['context']['reason']);
         $this->assertSame(\RuntimeException::class, $record['context']['exception_class']);
         $this->assertSame('logoff send failed', $record['context']['exception']);
+    }
+
+    public function testProcessTickContainsLoggerExceptionsDuringListenerFailure(): void
+    {
+        $transport = $this->createMock(TransportInterface::class);
+        $transport->method('isConnected')->willReturn(true);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $cm = new \Apn\AmiClient\Health\ConnectionManager();
+        $cm->setStatus(HealthStatus::READY);
+        $logger = new class extends AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                throw new \RuntimeException('logger failure');
+            }
+        };
+
+        $client = new AmiClient('node1', $transport, $correlation, connectionManager: $cm, logger: $logger);
+        $invocations = 0;
+        $client->onEvent('TestEvent', function (): void {
+            throw new \RuntimeException('listener failed');
+        });
+        $client->onEvent('TestEvent', function () use (&$invocations): void {
+            $invocations++;
+        });
+
+        $ref = new \ReflectionProperty(AmiClient::class, 'eventQueue');
+        /** @var EventQueue $eventQueue */
+        $eventQueue = $ref->getValue($client);
+        $eventQueue->push(AmiEvent::create(new Event(['event' => 'TestEvent']), 'node1'));
+
+        $client->processTick();
+
+        $this->assertSame(1, $invocations);
     }
 }

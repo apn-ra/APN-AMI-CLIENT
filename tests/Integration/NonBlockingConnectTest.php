@@ -271,7 +271,7 @@ class NonBlockingConnectTest extends TestCase
         fclose($conn);
     }
 
-    public function test_tick_all_clamps_non_zero_timeout_in_production_non_blocking_mode(): void
+    public function test_tick_all_honors_non_zero_timeout_in_reactor_select(): void
     {
         $registry = new ServerRegistry();
         $registry->add(new ServerConfig(
@@ -279,16 +279,8 @@ class NonBlockingConnectTest extends TestCase
             host: $this->host,
             port: $this->port
         ));
-        $registry->add(new ServerConfig(
-            key: 'hosted',
-            host: 'example.test',
-            port: 5038
-        ));
-
-        DnsTestHook::setResolved('example.test', '203.0.113.1');
 
         $options = new ClientOptions(
-            enforceIpEndpoints: false,
             connectTimeout: 1,
             readTimeout: 1,
             maxConnectAttemptsPerTick: 1
@@ -297,25 +289,16 @@ class NonBlockingConnectTest extends TestCase
         $manager = new AmiClientManager(
             $registry,
             $options,
-            reactor: new Reactor(),
-            hostnameResolver: static fn (string $host): string => DnsTestHook::resolve($host)
+            reactor: new Reactor()
         );
 
-        DnsTestHook::forbid();
-
         $goodClient = $manager->server('good');
-        $hostnameClient = $manager->server('hosted');
 
         $goodClient->open();
-        $hostnameClient->open();
 
         $conn = null;
         for ($i = 0; $i < 20; $i++) {
-            $start = microtime(true);
-            $manager->tickAll(500);
-            $elapsedMs = (microtime(true) - $start) * 1000;
-            $this->assertLessThan(50.0, $elapsedMs, 'tickAll must clamp caller timeout to non-blocking in production mode.');
-
+            $manager->tickAll(10);
             if ($conn === null) {
                 $conn = @stream_socket_accept($this->server, 0);
                 if ($conn) {
@@ -330,7 +313,13 @@ class NonBlockingConnectTest extends TestCase
 
         $this->assertNotNull($conn, 'Failed to connect good client');
         $this->assertTrue($goodClient->isConnected());
-        $this->assertEquals(HealthStatus::CONNECTING, $hostnameClient->getHealthStatus());
+
+        $timeoutMs = 20;
+        $start = microtime(true);
+        $manager->tickAll($timeoutMs);
+        $elapsedMs = (microtime(true) - $start) * 1000;
+        $this->assertGreaterThanOrEqual(5.0, $elapsedMs, 'tickAll should honor non-zero timeout with selector wait.');
+        $this->assertLessThan(100.0, $elapsedMs, 'tickAll must remain bounded by timeout.');
 
         fclose($conn);
     }

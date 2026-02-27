@@ -82,8 +82,8 @@ return [
     | Listen Worker Loop
     |--------------------------------------------------------------------------
     |
-    | Controls the ami:listen command cadence. The worker performs bounded
-    | blocking ticks to avoid CPU busy-spin while remaining responsive.
+    | Controls the ami:listen command selector wait. The worker yields only
+    | when no tick progress is detected to avoid CPU busy-spin.
     |
     */
     'listen' => [

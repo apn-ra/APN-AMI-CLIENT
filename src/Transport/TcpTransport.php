@@ -9,6 +9,7 @@ use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
 use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\ConnectionException;
+use Apn\AmiClient\Exceptions\InvalidConfigurationException;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -22,6 +23,9 @@ class TcpTransport implements TransportInterface
     private $resource = null;
     private bool $connecting = false;
     private bool $connected = false;
+    private string $remoteHost;
+    private int $lastTickReadBytes = 0;
+    private int $lastTickWrittenBytes = 0;
 
     private readonly WriteBuffer $writeBuffer;
     private readonly LoggerInterface $logger;
@@ -43,6 +47,7 @@ class TcpTransport implements TransportInterface
         ?LoggerInterface $logger = null,
         ?MetricsCollectorInterface $metrics = null,
         array $labels = [],
+        ?callable $hostnameResolver = null,
     ) {
         $this->writeBuffer = new WriteBuffer($writeBufferLimit);
         $this->logger = $logger ?? new NullLogger();
@@ -55,6 +60,8 @@ class TcpTransport implements TransportInterface
         if (!isset($this->labels['server_host'])) {
             $this->labels['server_host'] = $this->host;
         }
+
+        $this->remoteHost = $this->resolveHost($hostnameResolver);
     }
 
     /**
@@ -62,20 +69,7 @@ class TcpTransport implements TransportInterface
      */
     public function open(): void
     {
-        $hostIsIp = filter_var($this->host, FILTER_VALIDATE_IP) !== false;
-        if (!$hostIsIp) {
-            $policyPrefix = $this->enforceIpEndpoints
-                ? 'Hostname endpoints are disabled by policy; '
-                : '';
-            throw new ConnectionException(sprintf(
-                '%sHostname endpoints must be pre-resolved outside the tick loop; provide an IP for %s:%d.',
-                $policyPrefix,
-                $this->host,
-                $this->port
-            ));
-        }
-
-        $remote = sprintf('tcp://%s:%d', $this->host, $this->port);
+        $remote = sprintf('tcp://%s:%d', $this->remoteHost, $this->port);
         $errno = 0;
         $errstr = '';
 
@@ -121,6 +115,41 @@ class TcpTransport implements TransportInterface
         $this->resource = $resource;
         $this->connecting = true;
         $this->connected = false;
+    }
+
+    private function resolveHost(?callable $hostnameResolver): string
+    {
+        $hostIsIp = filter_var($this->host, FILTER_VALIDATE_IP) !== false;
+        if ($hostIsIp) {
+            return $this->host;
+        }
+
+        if ($this->enforceIpEndpoints) {
+            throw new InvalidConfigurationException(sprintf(
+                'Hostname endpoints are disabled by policy; provide an IP for %s:%d.',
+                $this->host,
+                $this->port
+            ));
+        }
+
+        if ($hostnameResolver === null) {
+            throw new InvalidConfigurationException(sprintf(
+                'Hostname endpoints require a pre-resolved IP or injected hostname resolver for %s:%d.',
+                $this->host,
+                $this->port
+            ));
+        }
+
+        $resolved = $hostnameResolver($this->host);
+        if (!is_string($resolved) || $resolved === '' || filter_var($resolved, FILTER_VALIDATE_IP) === false) {
+            throw new InvalidConfigurationException(sprintf(
+                'Hostname resolver returned invalid IP for %s:%d.',
+                $this->host,
+                $this->port
+            ));
+        }
+
+        return $resolved;
     }
 
     /**
@@ -198,11 +227,13 @@ class TcpTransport implements TransportInterface
 
     /**
      * @inheritDoc
-     * @param int $timeoutMs The stream_select timeout in milliseconds. 
-     *                       Use 0 for non-blocking production loops (Guideline 2).
+     * @param int $timeoutMs Maximum selector wait in milliseconds. Valid range:
+     *                       0..TransportInterface::MAX_TICK_TIMEOUT_MS. Negative values are rejected.
+     *                       Values above MAX_TICK_TIMEOUT_MS are clamped.
      */
     public function tick(int $timeoutMs = 0): void
     {
+        $this->resetTickStats();
         $timeoutMs = $this->normalizeTimeoutMs($timeoutMs);
 
         if ($this->resource === null || !is_resource($this->resource)) {
@@ -279,6 +310,7 @@ class TcpTransport implements TransportInterface
 
             $len = strlen($data);
             $bytesRead += $len;
+            $this->lastTickReadBytes += $len;
 
             if ($this->onDataCallback !== null) {
                 ($this->onDataCallback)($data);
@@ -312,6 +344,10 @@ class TcpTransport implements TransportInterface
             return;
         }
 
+        if ($written > 0) {
+            $this->lastTickWrittenBytes += $written;
+        }
+
         // Guideline 2: Every write operation must account for partial writes.
         $this->writeBuffer->advance($written);
     }
@@ -336,6 +372,23 @@ class TcpTransport implements TransportInterface
         if ($this->connected && $this->hasPendingWrites()) {
             $this->flush();
         }
+    }
+
+    /**
+     * @internal
+     */
+    public function resetTickStats(): void
+    {
+        $this->lastTickReadBytes = 0;
+        $this->lastTickWrittenBytes = 0;
+    }
+
+    /**
+     * @internal
+     */
+    public function getLastTickWrittenBytes(): int
+    {
+        return $this->lastTickWrittenBytes;
     }
 
     private function finalizeAsyncConnect(): void
@@ -369,9 +422,28 @@ class TcpTransport implements TransportInterface
         $this->writeBuffer->clear();
     }
 
-    private function normalizeTimeoutMs(int $timeoutMs): int
+    protected function normalizeTimeoutMs(int $timeoutMs): int
     {
-        return 0;
+        if ($timeoutMs < TransportInterface::MIN_TICK_TIMEOUT_MS) {
+            throw new \InvalidArgumentException('timeoutMs must be >= 0.');
+        }
+
+        $max = TransportInterface::MAX_TICK_TIMEOUT_MS;
+        if ($timeoutMs > $max) {
+            $this->metrics->increment('ami_runtime_timeout_clamped_total', [
+                'component' => 'transport',
+                'reason' => 'above_max',
+                'server_key' => $this->serverKey,
+            ]);
+            $this->safeLogWarning('Transport tick timeout exceeds maximum; clamping.', [
+                'server_key' => $this->serverKey,
+                'timeout_ms' => $timeoutMs,
+                'max_timeout_ms' => $max,
+            ]);
+            return $max;
+        }
+
+        return $timeoutMs;
     }
 
     /**
@@ -519,10 +591,22 @@ class TcpTransport implements TransportInterface
             'exception_class' => $error['exception_class'] ?? null,
         ], $context);
 
-        $this->logger->warning('Transport operation failed', $payload);
+        $this->safeLogWarning('Transport operation failed', $payload);
         $this->metrics->increment('ami_transport_errors_total', array_merge(
             $this->labels,
             ['operation' => $operation]
         ));
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function safeLogWarning(string $message, array $context): void
+    {
+        try {
+            $this->logger->warning($message, $context);
+        } catch (\Throwable) {
+            // Logging must never interrupt runtime paths.
+        }
     }
 }
