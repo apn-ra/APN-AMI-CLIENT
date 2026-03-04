@@ -1,0 +1,32 @@
+{
+  "id": "S5",
+  "name": "partial-writes-chunked-frames",
+  "server_count": 1,
+  "client_settings": {
+    "max_frames_per_tick": 1000,
+    "max_events_per_tick": 1000,
+    "max_bytes_read_per_tick": 65536,
+    "max_connect_attempts_per_tick": 2,
+    "event_queue_cap": 10000,
+    "parser_buffer_cap": 2097152,
+    "max_frame_size": 1048576,
+    "write_buffer_cap": 5242880,
+    "timeout_ms": 3000
+  },
+  "servers": [
+    {
+      "key": "node-a",
+      "script": [
+        {
+          "type": "send_on_action",
+          "action": "Ping",
+          "frame": "Response: Success\r\nActionID: chunk:5\r\nMessage: Pong",
+          "delimiter": "\\r\\n\\r\\n",
+          "chunk_size": 7,
+          "chunk_delay_ms": 2
+        }
+      ]
+    }
+  ],
+  "expectations": ["partial_chunks_reassembled", "deterministic_completion"]
+}

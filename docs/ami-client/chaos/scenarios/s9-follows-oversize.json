@@ -1,0 +1,25 @@
+{
+  "id": "S9",
+  "name": "follows-oversize",
+  "server_count": 1,
+  "client_settings": {
+    "max_frames_per_tick": 1000,
+    "max_events_per_tick": 1000,
+    "max_bytes_read_per_tick": 65536,
+    "max_connect_attempts_per_tick": 2,
+    "event_queue_cap": 10000,
+    "parser_buffer_cap": 2097152,
+    "max_frame_size": 1048576,
+    "write_buffer_cap": 5242880,
+    "timeout_ms": 3000
+  },
+  "servers": [
+    {
+      "key": "node-a",
+      "script": [
+        {"type": "send_frame", "at_ms": 0, "frame": "Response: Follows\\r\\nActionID: follows:1\\r\\nOutput: <huge>", "delimiter": "\\r\\n\\r\\n"}
+      ]
+    }
+  ],
+  "expectations": ["follows_output_cap_enforced", "protocol_exception", "no_memory_blowup"]
+}

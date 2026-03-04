@@ -36,4 +36,15 @@ AGENTS.md
 .aider*
 tests/.secrets/
 /docs/real-pbx-runs/*
-/docs/ami-client/*
+docs/ami-client/task-batches/*
+docs/ami-client/chaos/task-batches
+docs/ami-client/chaos/execution
+docs/ami-client/chaos/fixes
+docs/ami-client/chaos/fixtures
+docs/ami-client/chaos/metrics
+docs/ami-client/production-readiness/execution
+docs/ami-client/production-readiness/task-batches
+docs/ami-client/production-readiness/reports
+docs/ami-client/production-readiness/decisions
+docs/ami-client/production-readiness/findings
+docs/ami-client/production-readiness/fixes

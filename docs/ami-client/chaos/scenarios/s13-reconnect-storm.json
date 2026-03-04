@@ -1,0 +1,24 @@
+{
+  "id": "S13",
+  "name": "reconnect-storm",
+  "runner_mode": "reconnect_storm",
+  "server_count": 3,
+  "client_settings": {
+    "max_frames_per_tick": 1000,
+    "max_events_per_tick": 1000,
+    "max_bytes_read_per_tick": 65536,
+    "max_connect_attempts_per_tick": 1,
+    "event_queue_cap": 10000,
+    "parser_buffer_cap": 2097152,
+    "max_frame_size": 1048576,
+    "write_buffer_cap": 5242880,
+    "timeout_ms": 5000,
+    "connect_attempt_budget_per_tick": 1
+  },
+  "servers": [
+    {"key": "node-a", "script": [{"type": "close", "at_ms": 50}]},
+    {"key": "node-b", "script": [{"type": "close", "at_ms": 50}]},
+    {"key": "node-c", "script": [{"type": "close", "at_ms": 50}]}
+  ],
+  "expectations": ["exponential_backoff", "jitter_spread", "herd_control", "no_tight_loop"]
+}

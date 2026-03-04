@@ -1,0 +1,27 @@
+{
+  "id": "S7",
+  "name": "garbage-desync-recovery",
+  "server_count": 1,
+  "client_settings": {
+    "max_frames_per_tick": 1000,
+    "max_events_per_tick": 1000,
+    "max_bytes_read_per_tick": 65536,
+    "max_connect_attempts_per_tick": 2,
+    "event_queue_cap": 10000,
+    "parser_buffer_cap": 2097152,
+    "max_frame_size": 65536,
+    "write_buffer_cap": 5242880,
+    "timeout_ms": 3000
+  },
+  "servers": [
+    {
+      "key": "node-a",
+      "script": [
+        {"type": "send_frame", "at_ms": 0, "frame": "Response: Success\r\nActionID: 1", "delimiter": "\\r\\n\\r\\n"},
+        {"type": "send_garbage", "at_ms": 10, "bytes": "Some random garbage that is not valid AMI protocol data\\r\\n"},
+        {"type": "send_frame", "at_ms": 20, "frame": "Response: Success\r\nActionID: 2", "delimiter": "\\r\\n\\r\\n"}
+      ]
+    }
+  ],
+  "expectations": ["desync_recovered", "no_cross_frame_contamination"]
+}
