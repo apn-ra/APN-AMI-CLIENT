@@ -119,6 +119,10 @@ class SecretRedactor
 
     private function redactValue(string $value): string
     {
+        if (stripos($value, 'Action: Login') !== false) {
+            return '[redacted-login-action]';
+        }
+
         $redacted = $value;
         foreach ($this->sensitiveValuePatterns as $pattern) {
             $result = preg_replace($pattern, '********', $redacted);

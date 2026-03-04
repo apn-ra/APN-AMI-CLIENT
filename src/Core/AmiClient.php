@@ -68,6 +68,8 @@ class AmiClient implements AmiClientInterface
     private int $lastTickEventsDispatched = 0;
     private int $lastTickStateTransitions = 0;
     private int $lastTickConnectAttempts = 0;
+    private bool $debugTelemetryEnabled = false;
+    private int $debugTelemetryPreviewBytes = 160;
 
     public function __construct(
         private readonly string $serverKey,
@@ -149,8 +151,16 @@ class AmiClient implements AmiClientInterface
                 throw $loggerFailure;
             }
         });
-        
+
+        $this->configureDebugTelemetry();
         $this->transport->onData($this->onRawData(...));
+    }
+
+    public function setDebugTelemetry(bool $enabled, int $previewBytes = 160): void
+    {
+        $this->debugTelemetryEnabled = $enabled;
+        $this->debugTelemetryPreviewBytes = max(32, min(512, $previewBytes));
+        $this->configureDebugTelemetry();
     }
 
     /**
@@ -894,6 +904,31 @@ class AmiClient implements AmiClientInterface
         $this->connectionManager->setStatus(HealthStatus::DISCONNECTED);
         $this->parser->reset();
         $this->correlation->failAll($reason);
+    }
+
+    private function configureDebugTelemetry(): void
+    {
+        if ($this->debugTelemetryEnabled) {
+            $this->parser->setDebugHook(function (array $payload): void {
+                $this->safeLog('debug', 'Parser frame extracted', array_merge($payload, [
+                    'server_key' => $this->serverKey,
+                ]));
+            }, $this->debugTelemetryPreviewBytes);
+        } else {
+            $this->parser->setDebugHook(null);
+        }
+
+        if (method_exists($this->transport, 'setInboundTelemetryCallback')) {
+            if ($this->debugTelemetryEnabled) {
+                $this->transport->setInboundTelemetryCallback(function (array $payload): void {
+                    $this->safeLog('debug', 'Inbound transport chunk', array_merge($payload, [
+                        'server_key' => $this->serverKey,
+                    ]));
+                }, $this->debugTelemetryPreviewBytes);
+            } else {
+                $this->transport->setInboundTelemetryCallback(null);
+            }
+        }
     }
 
     /**

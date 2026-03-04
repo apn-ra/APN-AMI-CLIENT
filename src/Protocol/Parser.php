@@ -25,6 +25,9 @@ class Parser
     private int $bufferCap = 2097152; // 2MB (Guideline 6, Phase 1)
     private int $maxFrameSize = self::DEFAULT_FRAME_SIZE;
     private bool $bannerProcessed = false;
+    /** @var callable(array<string, mixed>): void|null */
+    private $debugHook = null;
+    private int $debugPreviewBytes = 160;
 
     public function __construct(int $bufferCap = 2097152, int $maxFrameSize = self::DEFAULT_FRAME_SIZE)
     {
@@ -43,6 +46,15 @@ class Parser
 
         $this->bufferCap = $bufferCap;
         $this->maxFrameSize = $effectiveMaxFrameSize;
+    }
+
+    /**
+     * @param callable(array<string, mixed>): void|null $hook
+     */
+    public function setDebugHook(?callable $hook, int $previewBytes = 160): void
+    {
+        $this->debugHook = $hook;
+        $this->debugPreviewBytes = max(32, min(512, $previewBytes));
     }
 
     /**
@@ -116,13 +128,21 @@ class Parser
         if ($posrn !== false && ($posn === false || $posrn < $posn)) {
             $pos = $posrn;
             $delimiterLen = 4;
+            $delimiterUsed = 'crlfcrlf';
         } else {
             $pos = $posn;
             $delimiterLen = 2;
+            $delimiterUsed = 'lflf';
         }
 
         $frame = substr($this->buffer, 0, $pos);
         $this->buffer = substr($this->buffer, $pos + $delimiterLen);
+
+        $this->emitDebugTelemetry([
+            'delimiter_used' => $delimiterUsed,
+            'frame_len' => strlen($frame),
+            'preview' => $this->redactPreview($frame),
+        ]);
 
         if (strlen($frame) > $this->maxFrameSize) {
             throw new ProtocolException(sprintf("Frame size %d exceeded %d bytes limit", strlen($frame), $this->maxFrameSize));
@@ -182,6 +202,31 @@ class Parser
         }
 
         return new Response($headers);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function emitDebugTelemetry(array $payload): void
+    {
+        if ($this->debugHook === null) {
+            return;
+        }
+
+        try {
+            ($this->debugHook)($payload);
+        } catch (\Throwable) {
+            // Telemetry hooks must never interrupt parser flow.
+        }
+    }
+
+    private function redactPreview(string $frame): string
+    {
+        $preview = substr($frame, 0, $this->debugPreviewBytes);
+        $preview = preg_replace('/\s+/', ' ', $preview) ?? $preview;
+        $preview = preg_replace('/\b(secret|password|token)\s*:\s*[^\r\n]+/i', '$1: ********', $preview) ?? $preview;
+
+        return trim($preview);
     }
 
     /**

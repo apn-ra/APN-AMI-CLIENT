@@ -23,7 +23,8 @@
         "sort-packages": true
     },
     "scripts": {
-        "check:core-boundaries": "php scripts/validate_guidelines.php"
+        "check:core-boundaries": "php scripts/validate_guidelines.php",
+        "realpbx:test": "php scripts/realpbx_test.php"
     },
     "minimum-stability": "stable"
 }

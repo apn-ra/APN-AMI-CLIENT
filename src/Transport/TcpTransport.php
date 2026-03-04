@@ -36,6 +36,9 @@ class TcpTransport implements TransportInterface
 
     /** @var callable(string): void|null */
     private $onDataCallback = null;
+    /** @var callable(array<string, mixed>): void|null */
+    private $inboundTelemetryCallback = null;
+    private int $inboundTelemetryPreviewBytes = 160;
 
     public function __construct(
         private readonly string $host,
@@ -197,6 +200,17 @@ class TcpTransport implements TransportInterface
     }
 
     /**
+     * Optional inbound chunk telemetry callback (debug path).
+     *
+     * @param callable(array<string, mixed>): void|null $callback
+     */
+    public function setInboundTelemetryCallback(?callable $callback, int $previewBytes = 160): void
+    {
+        $this->inboundTelemetryCallback = $callback;
+        $this->inboundTelemetryPreviewBytes = max(32, min(512, $previewBytes));
+    }
+
+    /**
      * @inheritDoc
      */
     public function isConnected(): bool
@@ -311,6 +325,7 @@ class TcpTransport implements TransportInterface
             $len = strlen($data);
             $bytesRead += $len;
             $this->lastTickReadBytes += $len;
+            $this->emitInboundTelemetry($data, $len);
 
             if ($this->onDataCallback !== null) {
                 ($this->onDataCallback)($data);
@@ -607,6 +622,35 @@ class TcpTransport implements TransportInterface
             $this->logger->warning($message, $context);
         } catch (\Throwable) {
             // Logging must never interrupt runtime paths.
+        }
+    }
+
+    private function emitInboundTelemetry(string $chunk, int $chunkLen): void
+    {
+        if ($this->inboundTelemetryCallback === null) {
+            return;
+        }
+
+        $delimiterUsed = null;
+        if (str_contains($chunk, "\r\n\r\n")) {
+            $delimiterUsed = 'crlfcrlf';
+        } elseif (str_contains($chunk, "\n\n")) {
+            $delimiterUsed = 'lflf';
+        }
+
+        $preview = substr($chunk, 0, $this->inboundTelemetryPreviewBytes);
+        $preview = preg_replace('/\b(secret|password|token)\s*:\s*[^\r\n]+/i', '$1: ********', $preview) ?? $preview;
+        $preview = addcslashes($preview, "\r\n\t\0");
+
+        try {
+            ($this->inboundTelemetryCallback)([
+                'chunk_len' => $chunkLen,
+                'delimiter_present' => $delimiterUsed !== null,
+                'delimiter_used' => $delimiterUsed,
+                'preview' => $preview,
+            ]);
+        } catch (\Throwable) {
+            // Telemetry hooks must never interrupt transport flow.
         }
     }
 }

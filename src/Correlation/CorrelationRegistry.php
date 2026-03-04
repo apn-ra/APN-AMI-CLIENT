@@ -7,6 +7,7 @@ namespace Apn\AmiClient\Correlation;
 use Apn\AmiClient\Exceptions\AmiTimeoutException;
 use Apn\AmiClient\Exceptions\ConnectionLostException;
 use Apn\AmiClient\Exceptions\BackpressureException;
+use Apn\AmiClient\Exceptions\ActionErrorResponseException;
 use Apn\AmiClient\Exceptions\MissingResponseException;
 use Apn\AmiClient\Core\Contracts\EventOnlyCompletionStrategyInterface;
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
@@ -93,14 +94,29 @@ final class CorrelationRegistry
     {
         $actionId = $response->getActionId();
         if ($actionId === null || !isset($this->pending[$actionId])) {
+            $this->recordUnmatchedResponse($response, $actionId);
             return;
         }
 
         $pending = $this->pending[$actionId];
         $strategy = $pending->getAction()->getCompletionStrategy();
+        $responseType = $this->responseType($response);
+        $this->logDecision('matched', $actionId, $strategy::class, $responseType);
 
         if ($strategy->onResponse($response)) {
-            $this->complete($actionId, $response);
+            if ($responseType === 'error') {
+                $this->fail(
+                    $actionId,
+                    new ActionErrorResponseException(
+                        $actionId,
+                        $response->getMessageHeader(),
+                        'Error'
+                    )
+                );
+                return;
+            }
+
+            $this->complete($actionId, $response, $strategy::class, $responseType);
         } else {
             // Save response, waiting for more messages (events)
             $this->responses[$actionId] = $response;
@@ -153,7 +169,7 @@ final class CorrelationRegistry
                 $response = new Response(['response' => 'Success', 'actionid' => $actionId]);
             }
 
-            $this->complete($actionId, $response);
+            $this->complete($actionId, $response, $strategy::class, 'success');
         }
     }
 
@@ -213,12 +229,13 @@ final class CorrelationRegistry
     /**
      * Cleanly completes an action.
      */
-    private function complete(string $actionId, Response $response): void
+    private function complete(string $actionId, Response $response, string $strategyClass = 'unknown', string $responseType = 'unknown'): void
     {
         $pending = $this->pending[$actionId];
         $events = $this->collectedEvents[$actionId] ?? [];
         
         $this->cleanup($actionId);
+        $this->logDecision('completed', $actionId, $strategyClass, $responseType);
 
         $pending->resolve($response, $events);
     }
@@ -229,8 +246,12 @@ final class CorrelationRegistry
     private function fail(string $actionId, Throwable $exception): void
     {
         $pending = $this->pending[$actionId];
+        $responseType = $exception instanceof ActionErrorResponseException
+            ? strtolower((string) ($exception->getResponseType() ?? 'error'))
+            : 'n/a';
 
         $this->cleanup($actionId);
+        $this->logDecision('failed', $actionId, $pending->getAction()->getCompletionStrategy()::class, $responseType);
 
         $pending->reject($exception);
     }
@@ -260,6 +281,45 @@ final class CorrelationRegistry
     {
         try {
             $this->logger->warning($message, $context);
+        } catch (\Throwable) {
+            // Logging must never interrupt runtime paths.
+        }
+    }
+
+    /**
+     * @param string|null $actionId
+     */
+    private function recordUnmatchedResponse(Response $response, ?string $actionId): void
+    {
+        $responseType = $this->responseType($response);
+        $context = [
+            'server_key' => $this->labels['server_key'] ?? 'unknown',
+            'action_id' => $actionId,
+            'response_type' => $responseType,
+            'reason' => $actionId === null ? 'missing_action_id' : 'unknown_action_id',
+        ];
+
+        $this->safeLogWarning('Correlation response unmatched', $context);
+        $this->metrics->increment('ami_correlation_unmatched_responses_total', $this->labels);
+        $this->logDecision('unmatched', $actionId, 'unknown', $responseType);
+    }
+
+    private function responseType(Response $response): string
+    {
+        $type = $response->getHeader('Response');
+        return is_string($type) ? strtolower($type) : 'unknown';
+    }
+
+    private function logDecision(string $decision, ?string $actionId, string $strategyClass, string $responseType): void
+    {
+        try {
+            $this->logger->debug('Correlation response decision', [
+                'server_key' => $this->labels['server_key'] ?? 'unknown',
+                'action_id' => $actionId,
+                'decision' => $decision,
+                'strategy' => $strategyClass,
+                'response_type' => $responseType,
+            ]);
         } catch (\Throwable) {
             // Logging must never interrupt runtime paths.
         }

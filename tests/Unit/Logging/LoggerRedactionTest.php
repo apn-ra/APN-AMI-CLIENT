@@ -87,4 +87,24 @@ final class LoggerRedactionTest extends TestCase
         $this->assertSame('Authorization: ********', $decoded['header']);
         $this->assertSame('ok', $decoded['safe']);
     }
+
+    public function test_logger_redacts_login_action_payload_preview(): void
+    {
+        $output = [];
+        $logger = new Logger(
+            redactor: new SecretRedactor(),
+            sinkWriter: function (string $line) use (&$output): int {
+                $output[] = $line;
+                return strlen($line);
+            }
+        );
+
+        $logger->debug('Inbound transport chunk', [
+            'preview' => "Action: Login\r\nUsername: dialer\r\nSecret: super-secret\r\n\r\n",
+        ]);
+
+        $decoded = json_decode($output[0] ?? '', true);
+        $this->assertIsArray($decoded);
+        $this->assertSame('[redacted-login-action]', $decoded['preview']);
+    }
 }

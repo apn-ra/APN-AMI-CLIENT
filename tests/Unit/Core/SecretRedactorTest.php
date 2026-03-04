@@ -145,4 +145,13 @@ class SecretRedactorTest extends TestCase
         $this->assertSame('********', $redacted['list'][0]);
         $this->assertSame('no secret', $redacted['list'][1]);
     }
+
+    public function testLoginActionPayloadIsRedactedInStringValues(): void
+    {
+        $redacted = $this->redactor->redact([
+            'preview' => "Action: Login\r\nUsername: admin\r\nSecret: super-secret\r\n\r\n",
+        ]);
+
+        $this->assertSame('[redacted-login-action]', $redacted['preview']);
+    }
 }

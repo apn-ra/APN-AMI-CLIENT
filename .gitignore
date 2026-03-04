@@ -34,3 +34,6 @@ docs/prompts/*
 .codex/*
 AGENTS.md
 .aider*
+tests/.secrets/
+/docs/real-pbx-runs/*
+/docs/ami-client/*
