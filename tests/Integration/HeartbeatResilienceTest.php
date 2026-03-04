@@ -13,6 +13,9 @@ use Apn\AmiClient\Health\HealthStatus;
 use Apn\AmiClient\Protocol\Ping;
 use Apn\AmiClient\Transport\TcpTransport;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\RuntimeEnvironment;
+
+require_once __DIR__ . '/../Support/RuntimeEnvironment.php';
 
 class HeartbeatResilienceTest extends TestCase
 {
@@ -23,12 +26,9 @@ class HeartbeatResilienceTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->server = stream_socket_server("tcp://{$this->host}:0", $errno, $errstr);
-        if ($this->server === false) {
-             $this->fail("Could not start mock server: $errstr");
-        }
-        $this->port = (int) parse_url(stream_socket_get_name($this->server, false), PHP_URL_PORT);
-        stream_set_blocking($this->server, false);
+        $runtime = RuntimeEnvironment::createTcpServerOrSkip($this, $this->host);
+        $this->server = $runtime['server'];
+        $this->port = $runtime['port'];
     }
 
     protected function tearDown(): void

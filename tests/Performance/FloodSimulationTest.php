@@ -44,9 +44,17 @@ class FloodSimulationTest extends TestCase
             $maxEventsPerTick,
             $logger
         );
+        ['client' => $clientC, 'onData' => $onDataC] = $this->createClient(
+            'node-c',
+            $capacity,
+            $maxFramesPerTick,
+            $maxEventsPerTick,
+            $logger
+        );
 
         $receivedA = 0;
         $receivedB = 0;
+        $receivedC = 0;
 
         $clientA->onAnyEvent(function (AmiEvent $event) use (&$receivedA): void {
             $receivedA++;
@@ -55,6 +63,9 @@ class FloodSimulationTest extends TestCase
         $clientB->onAnyEvent(function (AmiEvent $event) use (&$receivedB): void {
             $receivedB++;
         });
+        $clientC->onAnyEvent(function (AmiEvent $event) use (&$receivedC): void {
+            $receivedC++;
+        });
 
         for ($i = 0; $i < $floodLoad; $i++) {
             $onDataA("Event: FloodEvent\r\n\r\n");
@@ -62,21 +73,26 @@ class FloodSimulationTest extends TestCase
 
         for ($i = 0; $i < $normalLoad; $i++) {
             $onDataB("Event: NormalEvent\r\n\r\n");
+            $onDataC("Event: NormalEvent\r\n\r\n");
         }
 
         $manager = new AmiClientManager(new ServerRegistry(), new ClientOptions());
         $manager->addClient('node-a', $clientA);
         $manager->addClient('node-b', $clientB);
+        $manager->addClient('node-c', $clientC);
         $manager->tickAll(0);
 
         $this->assertSame($maxEventsPerTick, $receivedA);
         $this->assertSame($normalLoad, $receivedB);
+        $this->assertSame($normalLoad, $receivedC);
 
         $healthA = $clientA->health();
         $healthB = $clientB->health();
+        $healthC = $clientC->health();
 
         $this->assertSame($floodLoad - $capacity, $healthA['dropped_events']);
         $this->assertSame(0, $healthB['dropped_events']);
+        $this->assertSame(0, $healthC['dropped_events']);
     }
 
     /**

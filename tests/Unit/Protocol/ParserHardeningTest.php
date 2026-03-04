@@ -80,6 +80,10 @@ class ParserHardeningTest extends TestCase
         $valid = "Response: Success\n\n";
         $smallParser->push($valid);
         $this->assertInstanceOf(Response::class, $smallParser->next());
+
+        $diag = $smallParser->diagnostics();
+        $this->assertGreaterThanOrEqual(1, $diag['recoveries']);
+        $this->assertSame(65540, $diag['buffer_cap']);
     }
 
     public function test_it_rejects_invalid_buffer_cap_to_frame_size_relationship(): void

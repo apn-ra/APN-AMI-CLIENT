@@ -8,8 +8,10 @@ use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Event;
 use Apn\AmiClient\Protocol\Response;
+use Apn\AmiClient\Protocol\Strategies\AsyncEventStrategy;
 use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 use Apn\AmiClient\Exceptions\AmiTimeoutException;
+use Apn\AmiClient\Exceptions\ActionErrorResponseException;
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
 use PHPUnit\Framework\TestCase;
 
@@ -66,6 +68,41 @@ class CompletionStrategyIntegrationTest extends TestCase
         $registry->handleEvent(new Event(['event' => 'Complete', 'actionid' => 'test-id']));
         
         $this->assertCount(5, $collectedEvents, "Should respect maxMessages from strategy");
+    }
+
+    public function test_async_event_strategy_completes_on_terminal_event_without_response(): void
+    {
+        $registry = new CorrelationRegistry();
+        $strategy = new AsyncEventStrategy(['OriginateResponse']);
+        $action = new ConcreteMockAction('async:1', $strategy);
+
+        $pending = $registry->register($action);
+        $completed = false;
+        $pending->onComplete(function ($e, $r) use (&$completed): void {
+            $completed = $e === null && $r !== null && $r->isSuccess();
+        });
+
+        $registry->handleEvent(new Event(['event' => 'OriginateResponse', 'actionid' => 'async:1']));
+
+        $this->assertTrue($completed);
+        $this->assertSame(0, $registry->count());
+    }
+
+    public function test_async_event_strategy_error_response_fails_deterministically(): void
+    {
+        $registry = new CorrelationRegistry();
+        $action = new ConcreteMockAction('async:2', new AsyncEventStrategy(['OriginateResponse']));
+
+        $pending = $registry->register($action);
+        $captured = null;
+        $pending->onComplete(function ($e) use (&$captured): void {
+            $captured = $e;
+        });
+
+        $registry->handleResponse(new Response(['response' => 'Error', 'actionid' => 'async:2', 'message' => 'Failure']));
+
+        $this->assertInstanceOf(ActionErrorResponseException::class, $captured);
+        $this->assertSame(0, $registry->count());
     }
 }
 

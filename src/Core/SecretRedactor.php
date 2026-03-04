@@ -23,6 +23,8 @@ class SecretRedactor
 
     private const DEFAULT_SENSITIVE_KEYS = [
         'secret',
+        'ami_secret',
+        'md5secret',
         'password',
         'token',
         'auth',

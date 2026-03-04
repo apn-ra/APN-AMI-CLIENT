@@ -10,11 +10,15 @@
     },
     "require": {
         "php": ">=8.4",
-        "psr/log": "^3.0",
-        "illuminate/support": "^12.0",
-        "illuminate/console": "^12.0"
+        "psr/log": "^3.0"
+    },
+    "suggest": {
+        "illuminate/support": "Required to use the Laravel adapter in src/Laravel",
+        "illuminate/console": "Required to use the Laravel adapter command integration"
     },
     "require-dev": {
+        "illuminate/console": "^12.0",
+        "illuminate/support": "^12.0",
         "phpoption/phpoption": "^1.9",
         "phpunit/phpunit": "^12.0",
         "vlucas/phpdotenv": "^5.6"
@@ -24,6 +28,7 @@
     },
     "scripts": {
         "check:core-boundaries": "php scripts/validate_guidelines.php",
+        "test:full-with-env-detection": "bash scripts/run_full_suite_with_env_detection.sh",
         "realpbx:test": "php scripts/realpbx_test.php"
     },
     "minimum-stability": "stable"

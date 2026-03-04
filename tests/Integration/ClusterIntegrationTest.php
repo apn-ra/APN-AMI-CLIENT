@@ -12,6 +12,9 @@ use Apn\AmiClient\Correlation\CorrelationRegistry;
 use Apn\AmiClient\Correlation\CorrelationManager;
 use Apn\AmiClient\Protocol\GenericAction;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\RuntimeEnvironment;
+
+require_once __DIR__ . '/../Support/RuntimeEnvironment.php';
 
 class ClusterIntegrationTest extends TestCase
 {
@@ -23,13 +26,13 @@ class ClusterIntegrationTest extends TestCase
     protected function setUp(): void
     {
         // Setup two mock servers
-        $this->server1 = stream_socket_server("tcp://127.0.0.1:0", $errno, $errstr);
-        $this->port1 = (int)parse_url(stream_socket_get_name($this->server1, false))['port'];
-        stream_set_blocking($this->server1, false);
+        $runtime1 = RuntimeEnvironment::createTcpServerOrSkip($this, '127.0.0.1');
+        $this->server1 = $runtime1['server'];
+        $this->port1 = $runtime1['port'];
 
-        $this->server2 = stream_socket_server("tcp://127.0.0.1:0", $errno, $errstr);
-        $this->port2 = (int)parse_url(stream_socket_get_name($this->server2, false))['port'];
-        stream_set_blocking($this->server2, false);
+        $runtime2 = RuntimeEnvironment::createTcpServerOrSkip($this, '127.0.0.1');
+        $this->server2 = $runtime2['server'];
+        $this->port2 = $runtime2['port'];
     }
 
     protected function tearDown(): void

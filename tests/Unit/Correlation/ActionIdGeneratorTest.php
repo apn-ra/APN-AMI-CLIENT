@@ -76,4 +76,21 @@ class ActionIdGeneratorTest extends TestCase
         $this->assertLessThanOrEqual(96, strlen($idB));
         $this->assertNotSame($idA, $idB);
     }
+
+    public function test_non_ascii_segments_are_sanitized_to_ascii_safe_action_id(): void
+    {
+        $generator = new ActionIdGenerator('node-äß', 'worker-№1');
+        $id = $generator->next();
+
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9._:-]+$/', $id);
+        $this->assertCount(3, explode(':', $id));
+    }
+
+    public function test_it_throws_when_normalized_server_or_instance_segment_is_empty(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('serverKey');
+
+        new ActionIdGenerator('中文', 'instance');
+    }
 }

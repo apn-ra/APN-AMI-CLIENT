@@ -65,5 +65,10 @@ class ReconnectFairnessTest extends TestCase
         $this->assertEquals(1, $attempts['n1']);
         $this->assertEquals(1, $attempts['n2']);
         $this->assertEquals(1, $attempts['n3']);
+
+        $cluster = $manager->health()['_cluster'];
+        $this->assertSame(1, $cluster['connect_attempt_budget_per_tick']);
+        $this->assertSame(3, $cluster['reconnect_candidates_last_tick']);
+        $this->assertSame(2, $cluster['reconnect_skipped_due_budget_last_tick']);
     }
 }

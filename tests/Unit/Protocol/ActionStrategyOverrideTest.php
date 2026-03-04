@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace tests\Unit\Protocol;
 
 use Apn\AmiClient\Protocol\Originate;
+use Apn\AmiClient\Protocol\Strategies\AsyncEventStrategy;
 use Apn\AmiClient\Protocol\Strategies\MultiEventStrategy;
 use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 use PHPUnit\Framework\TestCase;
@@ -14,7 +15,10 @@ class ActionStrategyOverrideTest extends TestCase
     public function test_originate_supports_strategy_override(): void
     {
         $originate = new Originate('PJSIP/100');
-        $this->assertInstanceOf(SingleResponseStrategy::class, $originate->getCompletionStrategy());
+        $this->assertInstanceOf(AsyncEventStrategy::class, $originate->getCompletionStrategy());
+
+        $syncOriginate = new Originate('PJSIP/100', async: false);
+        $this->assertInstanceOf(SingleResponseStrategy::class, $syncOriginate->getCompletionStrategy());
 
         $customStrategy = new MultiEventStrategy('OriginateResponse');
         $overridden = new Originate('PJSIP/100', strategy: $customStrategy);

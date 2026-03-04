@@ -20,6 +20,8 @@ class SecretRedactorTest extends TestCase
     {
         $data = [
             'secret' => 'mysecret',
+            'ami_secret' => 'ami-pass',
+            'md5secret' => 'md5-pass',
             'password' => 'mypass',
             'token' => 'mytoken',
             'auth' => 'Bearer value',
@@ -30,6 +32,8 @@ class SecretRedactorTest extends TestCase
 
         $expected = [
             'secret' => '********',
+            'ami_secret' => '********',
+            'md5secret' => '********',
             'password' => '********',
             'token' => '********',
             'auth' => '********',
@@ -119,11 +123,13 @@ class SecretRedactorTest extends TestCase
         $redacted = $this->redactor->redact([
             'note' => 'token=abc123; user=me',
             'header' => 'Authorization: Bearer abc.def.ghi',
+            'ami' => 'Secret: manager-secret',
             'safe' => 'no secrets here',
         ]);
 
         $this->assertSame('********; user=me', $redacted['note']);
         $this->assertSame('Authorization: ********', $redacted['header']);
+        $this->assertSame('********', $redacted['ami']);
         $this->assertSame('no secrets here', $redacted['safe']);
     }
 

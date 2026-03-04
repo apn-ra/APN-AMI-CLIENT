@@ -28,6 +28,8 @@ class Parser
     /** @var callable(array<string, mixed>): void|null */
     private $debugHook = null;
     private int $debugPreviewBytes = 160;
+    private int $peakBufferBytes = 0;
+    private int $recoveries = 0;
 
     public function __construct(int $bufferCap = 2097152, int $maxFrameSize = self::DEFAULT_FRAME_SIZE)
     {
@@ -64,6 +66,8 @@ class Parser
     {
         $this->buffer = '';
         $this->bannerProcessed = false;
+        $this->peakBufferBytes = 0;
+        $this->recoveries = 0;
     }
 
     /**
@@ -72,9 +76,15 @@ class Parser
     public function push(string $data): void
     {
         $this->buffer .= $data;
+        $this->peakBufferBytes = max($this->peakBufferBytes, strlen($this->buffer));
 
         // Bounded memory check (Guideline 6: No unbounded memory growth)
         if (strlen($this->buffer) > $this->bufferCap) {
+             $this->emitDebugTelemetry([
+                 'recovery_reason' => 'buffer_cap_exceeded',
+                 'buffer_len' => strlen($this->buffer),
+                 'buffer_cap' => $this->bufferCap,
+             ]);
              $this->recover();
              if (strlen($this->buffer) > $this->bufferCap) {
                  $this->buffer = '';
@@ -87,6 +97,11 @@ class Parser
             if (!str_contains($this->buffer, "\r\n\r\n") && !str_contains($this->buffer, "\n\n")) {
                 $len = strlen($this->buffer);
                 $this->buffer = '';
+                $this->emitDebugTelemetry([
+                    'recovery_reason' => 'delimiter_not_found',
+                    'buffer_len' => $len,
+                    'max_frame_size' => $this->maxFrameSize,
+                ]);
                 throw new ParserDesyncException("No message delimiter found in $len bytes of data (exceeded safety limit)");
             }
         }
@@ -234,6 +249,7 @@ class Parser
      */
     private function recover(): void
     {
+        $this->recoveries++;
         $posrn = strpos($this->buffer, "\r\n\r\n");
         $posn = strpos($this->buffer, "\n\n");
 
@@ -244,5 +260,19 @@ class Parser
         } else {
             $this->buffer = '';
         }
+    }
+
+    /**
+     * @return array{buffer_len:int,peak_buffer_len:int,recoveries:int,buffer_cap:int,max_frame_size:int}
+     */
+    public function diagnostics(): array
+    {
+        return [
+            'buffer_len' => strlen($this->buffer),
+            'peak_buffer_len' => $this->peakBufferBytes,
+            'recoveries' => $this->recoveries,
+            'buffer_cap' => $this->bufferCap,
+            'max_frame_size' => $this->maxFrameSize,
+        ];
     }
 }

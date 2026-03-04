@@ -13,11 +13,18 @@ Dialer-optimized, multi-server AMI client for PHP/Laravel.
 
 ## Production Readiness
 
-Point-in-time readiness: **98/100**.  
-Audit: [`docs/audit/src-production-readiness-audit-014.md`](docs/audit/src-production-readiness-audit-014.md)  
-NBRC compliance is the gating principle for runtime behavior and release safety.
+Use current gate artifacts as the source of truth (do not rely on hardcoded scores in README).
 
-## Install
+Resolve the latest files by UTC timestamp in filename:
+- Latest score/verdict: `docs/ami-client/production-readiness/audits/*-production-readiness-score.md`
+- Latest findings: `docs/ami-client/production-readiness/findings/*-findings.md`
+- Latest chaos final suite: `docs/ami-client/chaos/reports/*-final-chaos-suite-results.md`
+- Latest remediation report/index: `docs/ami-client/production-readiness/reports/*-pr-remediation-report.md` and `*-pr-remediation-artifacts-index.md`
+
+If the latest chaos suite is not green, release notes must include an accepted-outcome decision record:
+- [`docs/ami-client/production-readiness/decisions/accepted-chaos-outcome-template.md`](docs/ami-client/production-readiness/decisions/accepted-chaos-outcome-template.md)
+
+## Install (Core)
 
 ```bash
 composer require apntalk/ami-client
@@ -25,6 +32,14 @@ composer require apntalk/ami-client
 
 Requirements:
 - PHP `>=8.4`
+
+## Install (Laravel Adapter)
+
+The core package is framework-agnostic. To use `src/Laravel/*`, install Laravel components in your app:
+
+```bash
+composer require illuminate/support illuminate/console
+```
 
 ## Quickstart (Laravel 12)
 

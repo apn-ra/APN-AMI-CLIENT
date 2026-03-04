@@ -595,10 +595,33 @@ class AmiClientTest extends TestCase
         
         $this->assertEquals('node1', $health['server_key']);
         $this->assertEquals(HealthStatus::DISCONNECTED->value, $health['status']);
+        $this->assertSame('disconnected', $health['status_alias']);
         $this->assertFalse($health['connected']);
         $this->assertIsInt($health['memory_usage_bytes']);
         $this->assertEquals(0, $health['pending_actions']);
         $this->assertEquals(0, $health['dropped_events']);
+    }
+
+    public function testSnapshotIncludesStructuredTickAndQueueFields(): void
+    {
+        $transport = $this->createMock(TransportInterface::class);
+        $transport->method('isConnected')->willReturn(false);
+        $correlation = new CorrelationManager(new ActionIdGenerator('node1'), new CorrelationRegistry());
+        $client = new AmiClient('node1', $transport, $correlation);
+
+        $snapshot = $client->snapshot();
+
+        $this->assertSame('node1', $snapshot['server_key']);
+        $this->assertSame('disconnected', $snapshot['status']);
+        $this->assertSame('disconnected', $snapshot['status_alias']);
+        $this->assertSame(0, $snapshot['queue_depth']);
+        $this->assertSame(0, $snapshot['pending_actions']);
+        $this->assertSame(0, $snapshot['dropped_events']);
+        $this->assertSame(0, $snapshot['parser_diagnostics']['recoveries']);
+        $this->assertSame(0, $snapshot['parser_diagnostics']['desync_total']);
+        $this->assertSame(0, $snapshot['tick_summary']['bytes_read']);
+        $this->assertSame(0, $snapshot['tick_summary']['frames_parsed']);
+        $this->assertSame(0, $snapshot['tick_summary']['events_dispatched']);
     }
 
     public function testMetricsRecording(): void

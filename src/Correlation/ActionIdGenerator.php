@@ -15,15 +15,17 @@ final class ActionIdGenerator
     private const int MAX_MAX_ACTION_ID_LENGTH = 256;
 
     private int $sequence = 0;
+    private readonly string $serverKey;
     private readonly string $instanceId;
     private readonly int $maxActionIdLength;
 
     public function __construct(
-        private readonly string $serverKey,
+        string $serverKey,
         ?string $instanceId = null,
         int $maxActionIdLength = self::DEFAULT_MAX_ACTION_ID_LENGTH
     ) {
-        $this->instanceId = $instanceId ?? bin2hex(random_bytes(4));
+        $this->serverKey = $this->normalizeSegment($serverKey, 'serverKey');
+        $this->instanceId = $this->normalizeSegment($instanceId ?? bin2hex(random_bytes(4)), 'instanceId');
         $this->maxActionIdLength = max(
             self::MIN_MAX_ACTION_ID_LENGTH,
             min(self::MAX_MAX_ACTION_ID_LENGTH, $maxActionIdLength)
@@ -89,5 +91,22 @@ final class ActionIdGenerator
         }
 
         return substr($value, 0, $maxLength - 13) . '~' . $hash;
+    }
+
+    private function normalizeSegment(string $value, string $fieldName): string
+    {
+        $trimmed = trim($value);
+        $ascii = preg_replace('/[^A-Za-z0-9._-]+/', '-', $trimmed) ?? '';
+        $ascii = trim($ascii, '.-_');
+
+        if ($ascii === '') {
+            throw new \InvalidArgumentException(sprintf('ActionID %s must normalize to a non-empty ASCII segment', $fieldName));
+        }
+
+        if ($ascii !== $trimmed) {
+            $ascii .= '-' . substr(hash('sha256', $trimmed), 0, 8);
+        }
+
+        return $ascii;
     }
 }

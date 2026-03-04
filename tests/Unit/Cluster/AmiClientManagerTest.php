@@ -246,4 +246,20 @@ final class AmiClientManagerTest extends TestCase
 
         $this->assertTrue(true);
     }
+
+    public function testHealthIncludesLifecycleAliasForUnmanagedRegistryEntry(): void
+    {
+        $registry = new ServerRegistry();
+        $registry->add(new ServerConfig(
+            key: 'node1',
+            host: '127.0.0.1',
+            port: 5038
+        ));
+
+        $manager = new AmiClientManager($registry);
+        $health = $manager->health();
+
+        $this->assertSame('disconnected', $health['node1']['status']);
+        $this->assertSame('disconnected', $health['node1']['status_alias']);
+    }
 }

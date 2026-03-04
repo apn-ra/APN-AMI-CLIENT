@@ -16,6 +16,7 @@ use Apn\AmiClient\Exceptions\BackpressureException;
 use Apn\AmiClient\Exceptions\InvalidConnectionStateException;
 use Apn\AmiClient\Health\ConnectionManager;
 use Apn\AmiClient\Health\HealthStatus;
+use Apn\AmiClient\Health\LifecycleStatusMapper;
 use Apn\AmiClient\Protocol\Action;
 use Apn\AmiClient\Protocol\Banner;
 use Apn\AmiClient\Protocol\Event;
@@ -68,6 +69,7 @@ class AmiClient implements AmiClientInterface
     private int $lastTickEventsDispatched = 0;
     private int $lastTickStateTransitions = 0;
     private int $lastTickConnectAttempts = 0;
+    private int $parserDesyncTotal = 0;
     private bool $debugTelemetryEnabled = false;
     private int $debugTelemetryPreviewBytes = 160;
 
@@ -394,6 +396,7 @@ class AmiClient implements AmiClientInterface
                 $framesProcessed++;
             }
         } catch (Throwable $e) {
+            $this->parserDesyncTotal++;
             $this->safeLog('error', 'Protocol error or parser desync during processing', [
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),
@@ -708,13 +711,71 @@ class AmiClient implements AmiClientInterface
      */
     public function health(): array
     {
+        $status = $this->connectionManager->getStatus();
         return [
             'server_key' => $this->serverKey,
-            'status' => $this->connectionManager->getStatus()->value,
+            'status' => $status->value,
+            'status_alias' => LifecycleStatusMapper::toOperationalAlias($status),
             'connected' => $this->transport->isConnected(),
             'memory_usage_bytes' => memory_get_usage(),
             'pending_actions' => $this->correlation->count(),
             'dropped_events' => $this->eventQueue->getDroppedEventsCount(),
+        ];
+    }
+
+    /**
+     * @return array{
+     *   server_key:string,
+     *   status:string,
+     *   status_alias:string,
+     *   queue_depth:int,
+     *   pending_actions:int,
+     *   dropped_events:int,
+     *   parser_diagnostics:array{
+     *     recoveries:int,
+     *     desync_total:int,
+     *     peak_buffer_len:int,
+     *     buffer_cap:int,
+     *     max_frame_size:int
+     *   },
+     *   tick_summary:array{
+     *     bytes_read:int,
+     *     bytes_written:int,
+     *     frames_parsed:int,
+     *     events_dispatched:int,
+     *     state_transitions:int,
+     *     connect_attempts:int
+     *   }
+     * }
+     */
+    public function snapshot(): array
+    {
+        $summary = $this->getLastTickSummary();
+        $status = $this->connectionManager->getStatus();
+        $diagnostics = $this->parser->diagnostics();
+
+        return [
+            'server_key' => $this->serverKey,
+            'status' => $status->value,
+            'status_alias' => LifecycleStatusMapper::toOperationalAlias($status),
+            'queue_depth' => $this->eventQueue->count(),
+            'pending_actions' => $this->correlation->count(),
+            'dropped_events' => $this->eventQueue->getDroppedEventsCount(),
+            'parser_diagnostics' => [
+                'recoveries' => $diagnostics['recoveries'],
+                'desync_total' => $this->parserDesyncTotal,
+                'peak_buffer_len' => $diagnostics['peak_buffer_len'],
+                'buffer_cap' => $diagnostics['buffer_cap'],
+                'max_frame_size' => $diagnostics['max_frame_size'],
+            ],
+            'tick_summary' => [
+                'bytes_read' => $summary->bytesRead,
+                'bytes_written' => $summary->bytesWritten,
+                'frames_parsed' => $summary->framesParsed,
+                'events_dispatched' => $summary->eventsDispatched,
+                'state_transitions' => $summary->stateTransitions,
+                'connect_attempts' => $summary->connectAttempts,
+            ],
         ];
     }
 
@@ -746,6 +807,7 @@ class AmiClient implements AmiClientInterface
             $this->parser->push($data);
             $this->connectionManager->recordRead();
         } catch (Throwable $e) {
+            $this->parserDesyncTotal++;
             $this->safeLog('error', 'Parser push error', [
                 'server_key' => $this->serverKey,
                 'exception' => $e->getMessage(),

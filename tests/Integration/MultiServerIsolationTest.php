@@ -114,4 +114,52 @@ class MultiServerIsolationTest extends TestCase
         $this->assertTrue($r1Resolved);
         $this->assertFalse($r2Resolved);
     }
+
+    public function test_action_id_remains_correlatable_with_mixed_server_and_instance_input(): void
+    {
+        $t1 = $this->createMock(TransportInterface::class);
+        $t1Callback = null;
+        $t1->method('onData')->willReturnCallback(function ($cb) use (&$t1Callback) { $t1Callback = $cb; });
+        $t1->method('isConnected')->willReturn(true);
+
+        $t2 = $this->createMock(TransportInterface::class);
+        $t2Callback = null;
+        $t2->method('onData')->willReturnCallback(function ($cb) use (&$t2Callback) { $t2Callback = $cb; });
+        $t2->method('isConnected')->willReturn(true);
+
+        $c1 = new AmiClient('node-ä', $t1, new CorrelationManager(new ActionIdGenerator('node-ä', 'worker-ß'), new CorrelationRegistry()));
+        $c2 = new AmiClient('node-ø', $t2, new CorrelationManager(new ActionIdGenerator('node-ø', 'worker-ß'), new CorrelationRegistry()));
+
+        $c1->processTick();
+        $c2->processTick();
+        $p1 = $c1->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));
+        $p2 = $c2->send(new \Apn\AmiClient\Protocol\GenericAction('Ping'));
+
+        $id1 = $p1->getAction()->getActionId();
+        $id2 = $p2->getAction()->getActionId();
+
+        $this->assertNotSame($id1, $id2);
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9._:-]+$/', $id1);
+        $this->assertMatchesRegularExpression('/^[A-Za-z0-9._:-]+$/', $id2);
+
+        $resolvedOnNode1 = false;
+        $p1->onComplete(function () use (&$resolvedOnNode1): void {
+            $resolvedOnNode1 = true;
+        });
+
+        $resolvedOnNode2 = false;
+        $p2->onComplete(function () use (&$resolvedOnNode2): void {
+            $resolvedOnNode2 = true;
+        });
+
+        $t2Callback("Response: Success\r\nActionID: " . $id1 . "\r\n\r\n");
+        $c2->processTick();
+        $this->assertFalse($resolvedOnNode1);
+        $this->assertFalse($resolvedOnNode2);
+
+        $t1Callback("Response: Success\r\nActionID: " . $id1 . "\r\n\r\n");
+        $c1->processTick();
+        $this->assertTrue($resolvedOnNode1);
+        $this->assertFalse($resolvedOnNode2);
+    }
 }

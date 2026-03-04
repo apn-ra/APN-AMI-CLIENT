@@ -20,6 +20,8 @@ use Apn\AmiClient\Core\NullMetricsCollector;
 use Apn\AmiClient\Events\AmiEvent;
 use Apn\AmiClient\Exceptions\AmiException;
 use Apn\AmiClient\Exceptions\InvalidConfigurationException;
+use Apn\AmiClient\Health\HealthStatus;
+use Apn\AmiClient\Health\LifecycleStatusMapper;
 use Apn\AmiClient\Protocol\Parser;
 use Apn\AmiClient\Transport\Reactor;
 use Apn\AmiClient\Transport\TcpTransport;
@@ -48,6 +50,10 @@ class AmiClientManager
     private array $anyEventListeners = [];
 
     private int $connectAttemptsThisTick = 0;
+    private int $lastTickConnectAttempts = 0;
+    private int $lastTickReconnectCandidates = 0;
+    private int $lastTickReconnectSkippedDueBudget = 0;
+    private int $lastTickReconnectCursorStart = 0;
     private int $reconnectCursor = 0;
     private readonly MetricsCollectorInterface $metrics;
     /** @var array<string, string> */
@@ -243,17 +249,28 @@ class AmiClientManager
 
         // 2. Internal state processing for all clients
         $this->connectAttemptsThisTick = 0;
+        $this->lastTickReconnectCandidates = 0;
+        $this->lastTickReconnectSkippedDueBudget = 0;
         $maxConnectAttempts = $this->options->maxConnectAttemptsPerTick;
 
         $keys = array_keys($this->clients);
         $count = count($keys);
         $startCursor = $this->reconnectCursor;
+        $this->lastTickReconnectCursorStart = $startCursor;
         for ($i = 0; $i < $count; $i++) {
             $index = ($startCursor + $i) % $count;
             $key = $keys[$index];
             $client = $this->clients[$key];
             try {
+                $status = $client->getHealthStatus();
+                $needsConnect = $status === HealthStatus::DISCONNECTED || $status === HealthStatus::RECONNECTING;
+                if ($needsConnect) {
+                    $this->lastTickReconnectCandidates++;
+                }
                 $canConnect = $this->connectAttemptsThisTick < $maxConnectAttempts;
+                if ($needsConnect && !$canConnect) {
+                    $this->lastTickReconnectSkippedDueBudget++;
+                }
                 $attemptedConnect = $client->processTick($canConnect);
                 if ($attemptedConnect) {
                     $this->connectAttemptsThisTick++;
@@ -278,6 +295,7 @@ class AmiClientManager
         }
 
         $tickDurationMs = (microtime(true) - $tickStartedAt) * 1000;
+        $this->lastTickConnectAttempts = $this->connectAttemptsThisTick;
         $this->recordAggregateTickMetrics($summary, $tickDurationMs);
 
         return $summary;
@@ -394,6 +412,7 @@ class AmiClientManager
                 $health[$key] = [
                     'server_key' => $key,
                     'status' => 'disconnected',
+                    'status_alias' => LifecycleStatusMapper::toOperationalAlias(HealthStatus::DISCONNECTED),
                     'connected' => false,
                     'memory_usage_bytes' => 0,
                     'pending_actions' => 0,
@@ -409,7 +428,22 @@ class AmiClientManager
             }
         }
 
+        $health['_cluster'] = [
+            'connect_attempts_last_tick' => $this->lastTickConnectAttempts,
+            'connect_attempt_budget_per_tick' => $this->options->maxConnectAttemptsPerTick,
+            'reconnect_cursor_start' => $this->lastTickReconnectCursorStart,
+            'reconnect_cursor_next' => $this->reconnectCursor,
+            'reconnect_candidates_last_tick' => $this->lastTickReconnectCandidates,
+            'reconnect_skipped_due_budget_last_tick' => $this->lastTickReconnectSkippedDueBudget,
+            'managed_clients' => count($this->clients),
+        ];
+
         return $health;
+    }
+
+    public function getLastTickConnectAttempts(): int
+    {
+        return $this->lastTickConnectAttempts;
     }
 
     /**

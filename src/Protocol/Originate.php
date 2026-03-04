@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Protocol;
 
 use Apn\AmiClient\Core\Contracts\CompletionStrategyInterface;
+use Apn\AmiClient\Protocol\Strategies\AsyncEventStrategy;
 use Apn\AmiClient\Protocol\Strategies\SingleResponseStrategy;
 
 /**
@@ -80,10 +81,25 @@ final readonly class Originate extends Action
         return 'Originate';
     }
 
+    public function getCompletionStrategy(): CompletionStrategyInterface
+    {
+        if ($this->strategy !== null) {
+            return $this->strategy;
+        }
+
+        $async = strtolower((string) ($this->parameters['Async'] ?? 'true')) === 'true';
+        if ($async) {
+            return new AsyncEventStrategy();
+        }
+
+        return new SingleResponseStrategy();
+    }
+
     public function withActionId(string $actionId): static
     {
         return new self(
             channel: $this->parameters['Channel'],
+            async: strtolower((string) ($this->parameters['Async'] ?? 'true')) === 'true',
             parameters: $this->parameters,
             actionId: $actionId,
             strategy: $this->strategy

@@ -193,6 +193,8 @@ class CorrelationRegistryTest extends TestCase
         // Should not throw and not affect anything
         $registry->handleResponse($response);
         $this->assertEquals(0, $registry->count());
+        $diag = $registry->diagnostics();
+        $this->assertSame(1, $diag['unmatched_responses']);
     }
 
     public function test_it_handles_event_with_unknown_action_id(): void
@@ -202,6 +204,87 @@ class CorrelationRegistryTest extends TestCase
         
         $registry->handleEvent($event);
         $this->assertEquals(0, $registry->count());
+    }
+
+    public function test_it_rejects_response_when_actionid_server_segment_mismatches_registry_server_key(): void
+    {
+        $labels = ['server_key' => 'node1'];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $metrics = $this->createMock(\Apn\AmiClient\Core\Contracts\MetricsCollectorInterface::class);
+        $registry = new CorrelationRegistry(
+            maxPending: 10,
+            logger: $logger,
+            metrics: $metrics,
+            labels: $labels
+        );
+
+        $action = $this->createMockAction('node2:abc:1', new SingleResponseStrategy());
+        $pending = $registry->register($action);
+
+        $resolved = false;
+        $pending->onComplete(function () use (&$resolved): void {
+            $resolved = true;
+        });
+
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with('Correlation server segment mismatch', $this->callback(function (array $context): bool {
+                return $context['reason'] === 'server_segment_mismatch'
+                    && $context['message_type'] === 'response'
+                    && $context['expected_server_key'] === 'node1'
+                    && $context['observed_server_key'] === 'node2'
+                    && $context['action_id'] === 'node2:abc:1';
+            }));
+
+        $metrics->expects($this->once())
+            ->method('increment')
+            ->with('ami_correlation_server_segment_mismatch_total', $labels);
+
+        $registry->handleResponse(new Response(['response' => 'Success', 'actionid' => 'node2:abc:1']));
+
+        $this->assertFalse($resolved);
+        $this->assertSame(1, $registry->count());
+    }
+
+    public function test_it_rejects_event_when_actionid_server_segment_mismatches_registry_server_key(): void
+    {
+        $labels = ['server_key' => 'node1'];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $metrics = $this->createMock(\Apn\AmiClient\Core\Contracts\MetricsCollectorInterface::class);
+        $registry = new CorrelationRegistry(
+            maxPending: 10,
+            logger: $logger,
+            metrics: $metrics,
+            labels: $labels
+        );
+
+        $strategy = new EventOnlyMockStrategy('Complete');
+        $action = $this->createMockAction('node2:abc:2', $strategy);
+        $pending = $registry->register($action);
+
+        $resolved = false;
+        $pending->onComplete(function () use (&$resolved): void {
+            $resolved = true;
+        });
+
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with('Correlation server segment mismatch', $this->callback(function (array $context): bool {
+                return $context['reason'] === 'server_segment_mismatch'
+                    && $context['message_type'] === 'event'
+                    && $context['expected_server_key'] === 'node1'
+                    && $context['observed_server_key'] === 'node2'
+                    && $context['action_id'] === 'node2:abc:2';
+            }));
+
+        $metrics->expects($this->once())
+            ->method('increment')
+            ->with('ami_correlation_server_segment_mismatch_total', $labels);
+
+        $registry->handleEvent(new Event(['event' => 'Complete', 'actionid' => 'node2:abc:2']));
+
+        $this->assertFalse($resolved);
+        $this->assertSame(1, $registry->count());
     }
 
     public function test_it_enforces_event_collection_limit(): void

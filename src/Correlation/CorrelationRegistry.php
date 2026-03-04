@@ -35,6 +35,11 @@ final class CorrelationRegistry
     private array $collectedEvents = [];
     /** @var callable(string, Throwable, Action): void|null */
     private $callbackExceptionHandler = null;
+    private int $matchedResponses = 0;
+    private int $unmatchedResponses = 0;
+    private int $timeouts = 0;
+    private int $completedActions = 0;
+    private int $failedActions = 0;
 
     private readonly LoggerInterface $logger;
     private readonly MetricsCollectorInterface $metrics;
@@ -97,11 +102,16 @@ final class CorrelationRegistry
             $this->recordUnmatchedResponse($response, $actionId);
             return;
         }
+        if (!$this->matchesExpectedServerKey($actionId)) {
+            $this->recordServerSegmentMismatch('response', $actionId);
+            return;
+        }
 
         $pending = $this->pending[$actionId];
         $strategy = $pending->getAction()->getCompletionStrategy();
         $responseType = $this->responseType($response);
         $this->logDecision('matched', $actionId, $strategy::class, $responseType);
+        $this->matchedResponses++;
 
         if ($strategy->onResponse($response)) {
             if ($responseType === 'error') {
@@ -130,6 +140,10 @@ final class CorrelationRegistry
     {
         $actionId = $event->getHeader('actionid');
         if (!is_string($actionId) || !isset($this->pending[$actionId])) {
+            return;
+        }
+        if (!$this->matchesExpectedServerKey($actionId)) {
+            $this->recordServerSegmentMismatch('event', $actionId);
             return;
         }
 
@@ -184,6 +198,7 @@ final class CorrelationRegistry
         foreach (array_keys($this->pending) as $actionId) {
             $pending = $this->pending[$actionId];
             if ($pending->isExpired($now)) {
+                $this->timeouts++;
                 $this->fail(
                     (string)$actionId,
                     new AmiTimeoutException(sprintf("ActionID %s timed out", $actionId))
@@ -235,6 +250,7 @@ final class CorrelationRegistry
         $events = $this->collectedEvents[$actionId] ?? [];
         
         $this->cleanup($actionId);
+        $this->completedActions++;
         $this->logDecision('completed', $actionId, $strategyClass, $responseType);
 
         $pending->resolve($response, $events);
@@ -251,6 +267,7 @@ final class CorrelationRegistry
             : 'n/a';
 
         $this->cleanup($actionId);
+        $this->failedActions++;
         $this->logDecision('failed', $actionId, $pending->getAction()->getCompletionStrategy()::class, $responseType);
 
         $pending->reject($exception);
@@ -300,6 +317,7 @@ final class CorrelationRegistry
         ];
 
         $this->safeLogWarning('Correlation response unmatched', $context);
+        $this->unmatchedResponses++;
         $this->metrics->increment('ami_correlation_unmatched_responses_total', $this->labels);
         $this->logDecision('unmatched', $actionId, 'unknown', $responseType);
     }
@@ -308,6 +326,54 @@ final class CorrelationRegistry
     {
         $type = $response->getHeader('Response');
         return is_string($type) ? strtolower($type) : 'unknown';
+    }
+
+    private function matchesExpectedServerKey(string $actionId): bool
+    {
+        $expectedServerKey = $this->labels['server_key'] ?? '';
+        if (!is_string($expectedServerKey) || $expectedServerKey === '') {
+            return true;
+        }
+
+        $serverSegment = $this->extractServerSegment($actionId);
+        if ($serverSegment === null) {
+            return true;
+        }
+
+        return $serverSegment === $expectedServerKey;
+    }
+
+    private function extractServerSegment(string $actionId): ?string
+    {
+        if ($actionId === '') {
+            return null;
+        }
+
+        $separatorPos = strpos($actionId, ':');
+        if ($separatorPos === false || $separatorPos === 0) {
+            return null;
+        }
+
+        return substr($actionId, 0, $separatorPos);
+    }
+
+    private function recordServerSegmentMismatch(string $messageType, string $actionId): void
+    {
+        $expectedServerKey = $this->labels['server_key'] ?? 'unknown';
+        $observedServerKey = $this->extractServerSegment($actionId) ?? 'unknown';
+        $context = [
+            'server_key' => $expectedServerKey,
+            'action_id' => $actionId,
+            'reason' => 'server_segment_mismatch',
+            'message_type' => $messageType,
+            'expected_server_key' => $expectedServerKey,
+            'observed_server_key' => $observedServerKey,
+        ];
+
+        $this->safeLogWarning('Correlation server segment mismatch', $context);
+        $this->unmatchedResponses++;
+        $this->metrics->increment('ami_correlation_server_segment_mismatch_total', $this->labels);
+        $this->logDecision('unmatched', $actionId, 'unknown', 'unknown');
     }
 
     private function logDecision(string $decision, ?string $actionId, string $strategyClass, string $responseType): void
@@ -323,5 +389,27 @@ final class CorrelationRegistry
         } catch (\Throwable) {
             // Logging must never interrupt runtime paths.
         }
+    }
+
+    /**
+     * @return array{
+     *   pending:int,
+     *   matched_responses:int,
+     *   unmatched_responses:int,
+     *   timeouts:int,
+     *   completed_actions:int,
+     *   failed_actions:int
+     * }
+     */
+    public function diagnostics(): array
+    {
+        return [
+            'pending' => count($this->pending),
+            'matched_responses' => $this->matchedResponses,
+            'unmatched_responses' => $this->unmatchedResponses,
+            'timeouts' => $this->timeouts,
+            'completed_actions' => $this->completedActions,
+            'failed_actions' => $this->failedActions,
+        ];
     }
 }
