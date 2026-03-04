@@ -45,6 +45,5 @@ docs/ami-client/chaos/metrics
 docs/ami-client/production-readiness/execution
 docs/ami-client/production-readiness/task-batches
 docs/ami-client/production-readiness/reports
-docs/ami-client/production-readiness/decisions
 docs/ami-client/production-readiness/findings
 docs/ami-client/production-readiness/fixes
