@@ -1,0 +1,49 @@
+claim: APN_AMI_CLIENT_TRUSTED_ENDPOINT_RESOLVER_PROOF_REVIEW_COMPLETE
+status: evidence_only_proof_review
+package_repo_path: /home/ra/Documents/apn_projects/APN-AMI-CLIENT
+package_repo_head: d029ab6a8366d511259f586cce9b520bab835961
+source_modified_by_this_run: false
+apntalk_repo_modified_by_this_run: false
+composer_dependency_updated: false
+package_tag_created: false
+package_published: false
+literal_ip_default_preserved_reviewed: true
+enforce_ip_default_true_preserved_reviewed: true
+trusted_hostname_resolver_reviewed: true
+resolver_policy_required_for_hostnames_reviewed: true
+allowlist_before_dns_reviewed: true
+cidr_validation_before_connect_reviewed: true
+arbitrary_dns_allowed: false
+global_enforce_off_recommended: false
+docker_socket_required: false
+transport_receives_literal_validated_ip_reviewed: true
+unsafe_enforce_false_without_policy_prevented_reviewed: true
+exception_taxonomy_reviewed: true
+backward_compatible_callable_preserved_reviewed: true
+new_package_tests_passed: true
+full_suite_failures_unrelated: true
+core_boundary_failures_unrelated: true
+php_lint_passed: true
+secrets_exposed: false
+commit_ready: true
+ready_for_package_commit_packaging: true
+ready_for_tagging: false
+ready_for_apntalk_integration: false
+evidence:
+  new_tests: "35 tests / 68 assertions PASS"
+  regression_touched_areas: "53 tests / 126 assertions PASS (ConfigLoader, AmiClientManager, ClientOptions, TcpTransport, NonBlockingConnect, ConfigLoaderHostnameResolver)"
+  full_suite: "342 tests, 6 failures, 1 skipped — 6 failures proven pre-existing at baseline d029ab6 (stash test); none reference the resolver"
+  core_boundaries: "non-zero only from pre-existing ListenCommand.php usleep; zero violations in new/modified files"
+  php_lint: "No syntax errors detected (all new + modified files, PHP 8.4.22)"
+  ssrf_probe: "IPv4-mapped-IPv6 metadata/loopback, metadata, loopback, public, CIDR network/broadcast all fail closed; untrusted host rejected with 0 DNS calls"
+  docker_shell_secret_scan: "none in new code"
+blockers:
+  - none_blocking: "No bounded defect found. Non-blocking enhancement notes recorded in blockers.md (literal-IP short-circuit asymmetry; manager-level IPv6 happy-path test)."
+  - pre_existing_not_blocking: "6 full-suite failures (missing fixtures + README artifact globs); core-boundary ListenCommand usleep; DnsTestHook isolation coupling."
+recommended_next_step_type: commit_only_packaging
+recommended_next_ai_coder: Claude Code
+operator_required_before_next_prompt:
+  - "Authorize commit (message + scope) of the resolver implementation; this review did NOT commit."
+  - "Decide package version for the later tag (minor v1.1.0 recommended vs v1.0.2 patch) — tagging is a separate, later task."
+  - "Decide whether the pre-existing .gitignore CLAUDE.md change is staged separately or left out of the feature commit."
+  - "Confirm pre-existing fixture/README/boundary failures are tracked separately (out of this scope)."

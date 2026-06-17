@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Apn\AmiClient\Cluster;
 
 use Apn\AmiClient\Cluster\Contracts\RoutingStrategyInterface;
+use Apn\AmiClient\Cluster\Endpoint\TrustedEndpointResolverInterface;
 use Apn\AmiClient\Core\AmiClient;
 use Apn\AmiClient\Core\Contracts\AmiClientInterface;
 use Apn\AmiClient\Core\Contracts\MetricsCollectorInterface;
@@ -64,6 +65,7 @@ class AmiClientManager
     private $hostnameResolver;
     /** @var null|callable(int): void */
     private $signalHandler;
+    private ?TrustedEndpointResolverInterface $trustedResolver;
 
     public function __construct(
         private readonly ServerRegistry $registry = new ServerRegistry(),
@@ -72,11 +74,13 @@ class AmiClientManager
         ?Reactor $reactor = null,
         ?MetricsCollectorInterface $metrics = null,
         ?callable $hostnameResolver = null,
-        ?callable $signalHandler = null
+        ?callable $signalHandler = null,
+        ?TrustedEndpointResolverInterface $trustedResolver = null
     ) {
         $this->metrics = $metrics ?? new NullMetricsCollector();
         $this->hostnameResolver = $hostnameResolver;
         $this->signalHandler = $signalHandler;
+        $this->trustedResolver = $trustedResolver;
         $bootstrapLogger = $logger ?? new Logger();
 
         try {
@@ -556,6 +560,17 @@ class AmiClientManager
             return $config->host;
         }
 
+        // Trusted-policy mode: a non-IP host is only admitted when an explicit
+        // trusted endpoint resolver is installed. This works even under
+        // enforce_ip_endpoints=true (the resolver validates allowlist + DNS +
+        // CIDR/reserved ranges and returns a literal IP). Any failure surfaces
+        // as a precise InvalidConfigurationException subclass (fail-closed).
+        if ($this->trustedResolver !== null) {
+            $resolved = $this->trustedResolver->resolve($config->host);
+
+            return $resolved->validatedIp;
+        }
+
         if ($options->enforceIpEndpoints) {
             throw new InvalidConfigurationException(sprintf(
                 'Invalid server "%s": host "%s" is not a literal IP while enforce_ip_endpoints is enabled.',
@@ -602,6 +617,12 @@ class AmiClientManager
         }
 
         if (filter_var($config->host, FILTER_VALIDATE_IP) !== false) {
+            return;
+        }
+
+        // A trusted endpoint resolver is responsible for validating non-IP
+        // hosts and yielding a literal IP; defer to it (resolveHost calls it).
+        if ($this->trustedResolver !== null) {
             return;
         }
 

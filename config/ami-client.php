@@ -79,6 +79,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Trusted Endpoint Policy (optional, opt-in)
+    |--------------------------------------------------------------------------
+    |
+    | RB-ENFORCE-IP Authority A. OFF by default: with no policy the client is
+    | literal-IP-only under enforce_ip_endpoints=true (unchanged behavior).
+    |
+    | When present, this declares the ONLY way trusted hostnames are accepted
+    | without disabling enforce_ip_endpoints. A hostname is admitted only if it
+    | matches the allowlist/patterns, resolves to a literal IP inside an allowed
+    | CIDR, and passes the reserved-range checks. Arbitrary DNS is never allowed.
+    | Leave commented out to keep strict literal-IP-only behavior.
+    |
+    | 'trusted_endpoint_policy' => [
+    |     'exact_allowlist'    => ['apntalk-asterisk-app'],
+    |     'allowlist_patterns' => ['/^apntalk-asterisk-[a-z0-9-]+-app$/'],
+    |     'allowed_cidrs'      => ['172.30.10.0/24', '10.250.0.0/16'],
+    |     'multi_ip'           => 'reject', // or 'deterministic_all_valid'
+    |     'reserved'           => [
+    |         // All default to deny except private; opt-in only for tests/special cases.
+    |         'allow_loopback'   => false,
+    |         'allow_link_local' => false,
+    |         'allow_multicast'  => false,
+    |         'allow_public'     => false,
+    |         'allow_private'    => true,
+    |         'denied_ips'       => [], // explicit bridge/gateway addresses
+    |     ],
+    | ],
+    */
+
+    /*
+    |--------------------------------------------------------------------------
     | Listen Worker Loop
     |--------------------------------------------------------------------------
     |

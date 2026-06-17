@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Apn\AmiClient\Exceptions;
 
-final class InvalidConfigurationException extends AmiException
+class InvalidConfigurationException extends AmiException
 {
     private ?string $patternType = null;
     private ?string $pattern = null;

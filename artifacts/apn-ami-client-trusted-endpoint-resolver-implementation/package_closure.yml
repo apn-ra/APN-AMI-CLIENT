@@ -1,0 +1,61 @@
+claim: APN_AMI_CLIENT_TRUSTED_ENDPOINT_RESOLVER_IMPLEMENTED
+status: implemented_uncommitted
+package_repo_path: /home/ra/Documents/apn_projects/APN-AMI-CLIENT
+package_repo_head_before: d029ab6a8366d511259f586cce9b520bab835961
+source_modified: true
+apntalk_repo_modified: false
+composer_dependency_updated: false
+package_tag_created: false
+package_published: false
+literal_ip_default_preserved: true
+enforce_ip_default_true_preserved: true
+trusted_hostname_resolver_added: true
+resolver_policy_required_for_hostnames: true
+allowlist_required: true
+cidr_validation_required: true
+arbitrary_dns_allowed: false
+global_enforce_off_recommended: false
+docker_socket_required: false
+multipbx_alias_pattern_supported: true
+transport_receives_literal_validated_ip: true
+unsafe_enforce_false_without_policy_prevented: true
+exception_taxonomy_added: true
+backward_compatible_callable_preserved: true
+package_tests_passed: true
+core_boundary_check_passed: false
+secrets_exposed: false
+ready_for_package_proof_review: true
+ready_for_tagging: false
+ready_for_apntalk_integration: false
+blockers:
+  - id: PRE_EXISTING_MISSING_PARSER_FIXTURES
+    severity: low
+    scope: pre_existing
+    detail: >-
+      tests/Unit/Protocol/ParserPermissionErrorTest.php (4 cases) and
+      tests/Unit/Correlation/PermissionErrorCorrelationTest.php (1 case) fail
+      because docs/ami-client/fixtures/permission-errors/*.raw are not present
+      in the repo (never committed). Identical failures reproduce at baseline
+      HEAD with this task's changes stashed. Not caused by and not related to
+      the trusted endpoint resolver.
+  - id: PRE_EXISTING_README_ARTIFACT_GLOB
+    severity: low
+    scope: pre_existing
+    detail: >-
+      tests/Unit/Docs/ReadmeArtifactReferencesTest.php release-checklist glob
+      assertion fails because referenced production-readiness artifact files are
+      absent in this checkout. Pre-existing, unrelated to this task.
+  - id: PRE_EXISTING_CORE_BOUNDARY_LISTEN_COMMAND
+    severity: low
+    scope: pre_existing
+    detail: >-
+      composer check:core-boundaries exits non-zero solely on a usleep() in
+      src/Laravel/Commands/ListenCommand.php (worker-layer cadence, allowed by
+      NBRC Mode B but flagged by the simple regex in validate_guidelines.php).
+      Pre-existing. All NEW files in this task add ZERO boundary violations.
+core_boundary_check_passed_note: >-
+  Overall script exits non-zero ONLY due to the pre-existing ListenCommand
+  usleep finding above. The trusted endpoint resolver files (src/Cluster/Endpoint/*,
+  new src/Exceptions/*) introduce no new violations (verified: 0 matches).
+recommended_next_step_type: evidence_only_proof_review
+recommended_next_ai_coder: Claude Code
